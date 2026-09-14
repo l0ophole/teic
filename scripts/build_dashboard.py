@@ -329,7 +329,7 @@ def run_live(console: Console) -> None:
                     [sys.stdin], [], [], TICK_SECONDS)
                 if readable:
                     char = sys.stdin.read(1)
-                    if wants_quit(char):
+                    if char == "" or wants_quit(char):
                         break
                 live.update(render_frame())
     finally:

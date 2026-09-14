@@ -199,8 +199,9 @@ def test_render_frame_survives_corrupt_state_file(tmp_path: Path):
 
 # ---------------------------------------------------------------- live loop
 
-def test_wants_quit_q_and_Q_variants():
+def test_wants_quit_q():
     assert bd.wants_quit("q") is True
+    assert bd.wants_quit("Q") is False  # only lowercase q quits
 
 
 def test_wants_quit_other_chars_and_none():
