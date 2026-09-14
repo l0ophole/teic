@@ -69,3 +69,52 @@ confirmed via `GET https://openrouter.ai/api/v1/models` that both
 `~deepseek/deepseek-v4-flash-latest` (leading `~` is real, present verbatim in
 the catalog) and `inclusionai/ling-3.0-flash-vl:free` exist. Kept as-is in
 `config/default.toml`.
+
+### Phase 1 — Telemetry → interoceptive vector (complete)
+
+- `teic/embodiment/sensors.py`: `SensorArray` computes the two channels
+  genuinely observable this early -- `latency_strain` from tick timing
+  jitter against the tempo's expected interval, and `context_pressure`
+  from pending input volume -- plus a derived `surprise_volatility` (the
+  population stddev of recent `latency_strain` readings). Every other
+  channel holds a documented placeholder value until the phase that wires
+  it for real (burn_rate/budget_reserve -> 6, prediction_error -> 3,
+  epistemic_tension -> 2/7, goal_gradient -> 5, memory_fragmentation -> 4,
+  social_contact -> 9, effector_integrity -> whenever an LLM call is
+  actually attempted). Constructed once per session so its ring-buffer
+  state persists across ticks.
+- `teic/interoception/inference.py`: `ChannelInference`, a per-channel
+  fixed-gain EWMA (alpha=0.3) mean/variance filter with a nonzero seed
+  variance and small per-tick process noise, so `RegisterState` is never
+  hand-authored and a constant-input channel's variance decays toward a
+  small floor instead of collapsing to a fake `0.0` "perfect certainty."
+  This is the minimal generative model this phase needs; Phase 3+ may
+  replace it with something richer behind the same `infer()` seam.
+- `teic/interoception/channels.py`: `ChannelPipeline` is the one object
+  `daemon.py` holds per session -- it composes one `SensorArray` with one
+  `ChannelInference` and exposes `process(tick_ctx, tick_id, ts) ->
+  RegisterState`. The `RawSensorSample` that produced that state is kept
+  on `pipeline.last_raw` (rather than returned as part of a tuple) so
+  callers that only want the inferred vector don't have to unpack one.
+- `teic/daemon.py`: `_on_tick` now builds a real `TickContext` from the
+  tick's own fields (no input task exists yet, so `idle_state`/
+  `pending_input_count` stay at neutral defaults) and calls
+  `ChannelPipeline.process()` to get a real `RegisterState`, then writes
+  `register_sample` rows with the actual sampled `raw_value`,
+  `inferred_value`, and `inferred_var` per channel -- replacing Phase 0's
+  flat-zero placeholders.
+- **Scope decision, stated explicitly so it isn't mistaken for a gap**:
+  `affect_sample` is left exactly as Phase 0 wrote it (neutral
+  placeholder valence/arousal/mood/attractor_label). Affect dynamics and
+  mood are Layer 2 work that belongs with the non-linguistic modulation
+  gate in Phase 2, not this phase -- Phase 1's job was strictly the
+  telemetry-to-interoceptive-vector path (register channels), not affect.
+
+Gate test: `tests/test_gates/test_phase1.py` -- a synthetic 30-tick daemon
+run driven by a deterministic, non-constant `dt_real` jitter sequence
+(injected via the same `time_source`/`sleep_fn` DI pattern Phase 0's
+heartbeat test uses), asserting the resulting `register_sample` row count
+and that `latency_strain`'s `inferred_value`/`inferred_var` actually move
+across ticks rather than staying pinned at Phase 0's flat `0.0`. Per this
+phase's gate wording, no assertion is made about LLM calls, prompt
+content, or generated text.
