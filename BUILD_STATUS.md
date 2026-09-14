@@ -170,7 +170,7 @@ mypy
       the same wiring) and new unit tests for `forward_model`/`protention`)
 - [x] `mypy` passes project-wide (bare `mypy`, no args)
 - [x] Gate test: `tests/test_gates/test_phase3.py` -- a synthetic
-      35-tick daemon run with a deliberate two-phase step function (15
+      60-tick daemon run with a deliberate two-phase step function (40
       baseline ticks at nominal `dt_real`, then 20 ticks at a sustained 3x
       `dt_real`, standing in for `PlanBuildTEIC.md`'s "silently inflate a
       tool's latency 3x" per this phase's scope ruling) asserts
@@ -178,11 +178,20 @@ mypy
       on the first injected tick, then decays back down well below that
       spike by the end of the run even though `dt_real` never returns to
       baseline -- proving the model re-adapts to the new regime rather than
-      just recovering from a blip. For contrast, `latency_strain` (the
-      fixed-expectation, non-adaptive sibling signal) is asserted to stay
-      elevated across the entire injected window without that
-      spike-then-decay shape -- concrete evidence Phase 3 added a genuinely
-      new, learned signal rather than just relabeling `latency_strain`.
+      just recovering from a blip. The 40-tick baseline is sized so
+      `tempo_hz`/`prediction_error` have actually converged from the
+      cold-start transient by the time the baseline window is sampled
+      (verified by hand-instrumenting the scenario; a shorter baseline
+      samples mid-transient and is fragile against unrelated tuning
+      changes). For contrast, `latency_strain` (the fixed-expectation,
+      non-adaptive sibling signal) is asserted to stay elevated across the
+      entire injected window without that spike-then-decay shape -- though
+      in this scenario `latency_strain` is already pinned at its clamp
+      ceiling from the cold-start transient several ticks before the
+      injection even happens, so this shows only that it doesn't decay
+      from its own elevated level, not a response to the injected step
+      specifically. See the test module's own docstring for the full
+      caveat and the verification numbers.
 
 ### How to verify this phase yourself
 

@@ -14,17 +14,40 @@ A subtlety this test's thresholds must respect: `dt_real` is scripted as a
 literal step function, but `tempo_hz` itself is *not* held fixed -- it's
 still being driven every tick by Phase 2's real `ModulationCompute`
 feedback loop (arousal -> tempo_hz -> next tick's nominal interval). With
-zero initial arousal, tempo drifts from `base_tempo_hz` down toward
-`idle_tempo_hz` after tick 0, which (because the scripted `dt_real` no
-longer matches the shrunken nominal interval) drives `latency_strain` and
-therefore arousal back up, and tempo climbs toward `max_tempo_hz` and
-saturates there within the baseline window. This means the *absolute*
-prediction_error values during baseline are not literally ~0.0 by the end
-of a 15-tick window -- they're still decaying from that early transient.
-The assertions below are therefore relative/ratio-based (spike vs. baseline
-mean, spike vs. end-of-run mean), computed from this run's own real
-`register_sample` rows, not against hand-derived absolute numbers -- this
-is robust to the tempo-feedback transient rather than fighting it.
+zero initial arousal, tempo drops to `idle_tempo_hz` right after tick 0;
+the resulting mismatch between the scripted `dt_real` and the now-shrunken
+nominal interval produces a `latency_strain` reading, and because
+`AffectDynamics._raw_arousal` only ever *adds* for a timing mismatch (it
+has no term that lowers arousal when things are running smoothly), that
+mismatch pushes arousal -- and therefore tempo -- monotonically upward
+every subsequent tick until `tempo_hz` saturates at `max_tempo_hz`. This
+is a property of the cold start alone, not of the 3x injection: the exact
+same runaway-then-saturate trajectory happens even in a run with no
+injection at all (verified by hand -- see the module-level constants
+below for the numbers that motivated them).
+
+Two consequences of this cold-start transient drive this test's design:
+
+1. `prediction_error` itself does not sit near 0.0 immediately -- it is
+   still decaying from the early transient for a while. `N_BASELINE` is
+   set large enough (40 ticks) that both `tempo_hz` and `prediction_error`
+   have actually converged (tempo pinned at `max_tempo_hz`, prediction_error
+   down in the 1e-3/1e-4 range and still shrinking only in the fourth
+   decimal place) by the time `BASELINE_WINDOW` samples it -- not still
+   visibly mid-transient the way a shorter baseline would be. The
+   assertions are relative/ratio-based (spike vs. baseline mean, spike vs.
+   end-of-run mean), computed from this run's own real `register_sample`
+   rows, not against hand-derived absolute numbers.
+2. `latency_strain` (sensors.py's fixed-expectation signal, clamped to
+   5.0) hits that clamp ceiling around tick 10-11 -- several ticks
+   *before* `N_BASELINE` even ends, and well before the 3x injection --
+   and then stays pinned there for the rest of the run, injection or not.
+   Because of that, the `latency_strain` assertions below can only show
+   that it *does not decay* from its already-saturated level; they are
+   not evidence of a lack of response to the injected step-change
+   specifically (it was already saturated before the step-change
+   happened). See that assertion's own comment for exactly what is and
+   isn't being claimed.
 
 Assertions use the `raw_value` column (the value `ForwardModel.observe()`/
 `SensorArray.sample()` compute fresh each tick), matching `test_daemon.py`'s
@@ -41,7 +64,18 @@ from teic.daemon import TeicDaemon
 from teic.settings import Settings
 from teic.temporal.heartbeat import Heartbeat
 
-N_BASELINE = 15
+# 40, not a smaller round number: verified by hand-instrumenting this exact
+# scenario (TeicDaemon + this fake heartbeat) that with N_BASELINE=15,
+# BASELINE_WINDOW (ticks 10-14) is *not* converged -- tempo_hz is still
+# climbing toward max_tempo_hz and prediction_error is still visibly
+# decaying tick-over-tick there (values ~0.92, 0.82, 0.64, 0.48, 0.36),
+# which makes the spike-ratio assertion below fragile against unrelated
+# tuning changes. At
+# N_BASELINE=40, tempo_hz has saturated at max_tempo_hz (to within 1e-4)
+# and prediction_error in BASELINE_WINDOW (ticks 35-39) is down to
+# ~6e-4..2e-4 -- effectively flat in absolute terms, changing only in the
+# fourth decimal place tick-over-tick, rather than still mid-transient.
+N_BASELINE = 40
 N_INJECTED = 20
 N_TICKS = N_BASELINE + N_INJECTED
 
@@ -49,8 +83,9 @@ BASELINE_DT_REAL = 1.0
 INJECTED_DT_REAL = 3.0
 
 # Baseline window for the "before the spike" comparison: the last few
-# ticks of the baseline phase, by which point the forward model has had
-# time to re-settle from the tick-0 cold-start transient described above.
+# ticks of the baseline phase, by which point both tempo_hz and
+# prediction_error have actually converged from the tick-0 cold-start
+# transient described above (see the N_BASELINE comment for the numbers).
 BASELINE_WINDOW = range(N_BASELINE - 5, N_BASELINE)
 
 # Window for the "has it adapted to the new regime" comparison: the final
@@ -156,11 +191,20 @@ async def test_phase3_prediction_error_spikes_then_adapts(tmp_settings: Settings
 
     # --- Contrast: latency_strain is fixed-expectation (built from
     # `tick_ctx.dt_real` vs. the plain `1 / tempo_hz` nominal, never an
-    # adaptive multiplier) so it does not show this spike-then-decay
-    # shape -- it stays elevated across the *entire* injected window
-    # instead of settling back down. This is the concrete evidence that
-    # Phase 3 added a genuinely new (learned) signal rather than just
-    # relabeling latency_strain.
+    # adaptive multiplier) so, unlike prediction_error, it never decays --
+    # it stays elevated across the *entire* injected window. NOTE on what
+    # this assertion does and does not show: by this point in the run
+    # latency_strain has already been pinned at its clamp ceiling since
+    # around tick 10-11 (a side effect of the cold-start tempo-feedback
+    # transient described in the module docstring, unrelated to the 3x
+    # injection at N_BASELINE) and stays pinned there whether or not the
+    # injection happens. So this is a real check that latency_strain does
+    # not decay from its own elevated level the way prediction_error does
+    # -- but it is not, by itself, evidence that Phase 3 added a
+    # meaningfully different signal beyond "one has an adaptive multiplier
+    # and a decay, the other has a fixed clamp ceiling and none." The
+    # decay/no-decay contrast between the two assertions above and below
+    # is real; do not read more into it than that.
     injected_latency_strain = [latency_strain[i] for i in range(N_BASELINE, N_TICKS)]
     assert all(v >= LATENCY_STRAIN_MIN_ELEVATED for v in injected_latency_strain), (
         f"expected latency_strain to stay elevated (>= {LATENCY_STRAIN_MIN_ELEVATED}) "

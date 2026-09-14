@@ -259,22 +259,33 @@ flat `0.0` placeholder, closing the daemon's first predict/observe loop.
   consumer yet**: it exists so a later phase (Phase 4+'s retrieval/
   consolidation work is the natural candidate) can compare predicted vs.
   actual interoceptive trajectories, not because anything reads it today.
-- **Contrast with `latency_strain`, the concrete evidence this is new,
-  not a relabeling**: `embodiment/sensors.py`'s `latency_strain` is a
-  fixed-expectation signal -- `|dt_real - (1 / tempo_hz)| / (1 / tempo_hz)`,
-  with no learning -- so a sustained step-change in timing leaves it
-  permanently elevated with no decay. `prediction_error` uses the same
-  kind of normalized-error formula but against `ForwardModel`'s *adaptive*
-  prediction, so it spikes on the same step-change and then decays as the
-  multiplier re-learns the new regime. (Note: `sensors.py`'s `SensorArray`
-  docstring still describes `surprise_volatility` as a proxy "until Phase 3
-  gives us a real prediction-error signal" -- that sentence is now stale
-  now that this phase exists; left as-is since `sensors.py` is out of this
-  phase's file list, per its own scope ruling.)
+- **Contrast with `latency_strain`**: `embodiment/sensors.py`'s
+  `latency_strain` is a fixed-expectation signal --
+  `|dt_real - (1 / tempo_hz)| / (1 / tempo_hz)`, with no learning -- so it
+  never shows prediction_error's spike-then-decay shape. `prediction_error`
+  uses the same kind of normalized-error formula but against
+  `ForwardModel`'s *adaptive* prediction, so it spikes on a step-change and
+  then decays as the multiplier re-learns the new regime. The gate test's
+  own contrast assertions on this are narrower than that framing might
+  suggest, though: in the gate test's scenario, `latency_strain` saturates
+  at its clamp ceiling a few ticks into the *baseline* phase (a side effect
+  of the cold-start tempo-feedback transient, independent of the later
+  injected step-change) and stays pinned there for the rest of the run
+  regardless of the injection. So the test can only show that
+  `latency_strain` does not decay from its own already-saturated level --
+  not that it fails to respond to the injected step specifically. See
+  `tests/test_gates/test_phase3.py`'s module docstring and the contrast
+  assertion's own comment for the exact scope of that check. `sensors.py`'s
+  `SensorArray` docstring has been updated to state that `prediction_error`
+  is now a real signal from `ForwardModel` and that `surprise_volatility`
+  is a separate, unchanged proxy -- `sensors.py` *was* edited in this phase
+  (Task 2 added `sample()`'s `prediction_error` parameter and updated the
+  module docstring's channel-ownership list), so it was never out of scope;
+  that one sentence was simply missed until this pass.
 
-Gate test: `tests/test_gates/test_phase3.py` -- a synthetic 35-tick daemon
+Gate test: `tests/test_gates/test_phase3.py` -- a synthetic 60-tick daemon
 run (same DI pattern as Phase 1/2's) with a deliberate two-phase step
-function: 15 baseline ticks at nominal `dt_real`, then 20 ticks at a
+function: 40 baseline ticks at nominal `dt_real`, then 20 ticks at a
 sustained 3x `dt_real` standing in for `PlanBuildTEIC.md`'s "silently
 inflate a tool's latency 3x," per this phase's scope ruling above. Because
 `tempo_hz` is still live-driven by Phase 2's arousal feedback loop (not
@@ -284,6 +295,16 @@ ratio-based against this run's own values rather than hand-derived
 absolute numbers: the first injected tick's `prediction_error` is at least
 3x the recent baseline mean, and the end-of-run mean is at least 10x
 smaller than that spike even though `dt_real` never returns to baseline --
-proving re-adaptation to a new regime, not mere recovery from a blip. For
-contrast, `latency_strain` is asserted to stay elevated across the entire
-injected window without that spike-then-decay shape.
+proving re-adaptation to a new regime, not mere recovery from a blip. The
+40-tick baseline (not a shorter one) is deliberate: it's how long it takes
+`tempo_hz` and `prediction_error` to actually converge from the cold-start
+transient, verified by hand-instrumenting the scenario -- a shorter
+baseline window samples `prediction_error` mid-transient, which is fragile
+against unrelated tuning changes (see the test module's own docstring for
+the verification numbers). For contrast,
+`latency_strain` is asserted to stay elevated across the entire injected
+window without that spike-then-decay shape -- though, per the note above,
+`latency_strain` is already saturated at its clamp ceiling before the
+injection even happens in this scenario, so this shows only that it
+doesn't decay from its own elevated level, not that it fails to respond to
+the injected step-change specifically.

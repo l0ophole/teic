@@ -58,8 +58,13 @@ class SensorArray:
 
     Holds a ring buffer of the last `_LATENCY_HISTORY_LEN` `latency_strain`
     readings so `surprise_volatility` can be derived as their population
-    stddev -- a proxy for "how jittery has timing been lately" until
-    Phase 3 gives us a real prediction-error signal.
+    stddev -- a proxy for "how jittery has timing been lately," computed
+    here and unchanged by Phase 3. As of Phase 3, `prediction_error` is a
+    separate, genuinely learned signal (from `ForwardModel`, wired in via
+    `daemon.py` and threaded through `sample()`'s `prediction_error`
+    parameter below) -- the two are distinct channels and should not be
+    conflated: `surprise_volatility` did not change, `prediction_error`
+    is what's new.
     """
 
     def __init__(self) -> None:
