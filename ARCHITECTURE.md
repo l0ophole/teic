@@ -389,3 +389,79 @@ same same-inputs-except-affect, different-output pattern Phase 2's gate
 test used for the modulation pathway. A contrast case with
 `retrieval_affect_weight=0.0` shows the ranking is otherwise stable across
 repeated identical calls, isolating affect (not noise) as what moved it.
+
+### Phase 5 — Workspace arbiter, ignition threshold, broadcast (complete)
+
+- **Candidate sources are narrow but real, not fabricated placeholders.**
+  With no user-input channel (Phase 9) or real LLM-cognition loop wired
+  yet, this phase's `daemon._on_tick` collects exactly two live sources:
+  `"interoception"` (this tick's own `RegisterState`/`AffectState`, the
+  same data Phase 4 already serializes into memory) and `"memory"` (the
+  top result of a real `MemoryStore.query()` run *before* this tick's own
+  memory write, so it can't trivially match itself; simply absent at cold
+  start). `mineness.py`'s `mineness_tag()` is a real dispatch on
+  `source_module` rather than a hard-coded return — `"user_input" ->
+  "other"` is already wired for Phase 9, even though no live path produces
+  it yet, so wiring a real user-input candidate later needs no change to
+  this module.
+- **No real OpenRouter call is wired into the tick loop this phase.**
+  `llm/client.py`/`llm/prompt_assembly.py` (Phase 0 skeleton) remain
+  unused by `daemon.py`: actually spending budget on `ignited=True` with
+  no viability/budget accounting live yet (Phase 6's scope) would violate
+  the locked-in $10/month cap in substance. `teic/workspace/broadcast.py`'s
+  `render_prompt_if_ignited()` is the real enforcement seam this phase
+  builds and fully tests (gating any prompt construction on `ignited`,
+  since `assemble_prompt()` itself is a pure formatter with no ignition
+  check by design) — Phase 6 wires its real send through this seam rather
+  than reinventing the gate.
+- **`salience_weight_overrides` (computed with "no consumer yet" since
+  Phase 2) is now real.** `arbiter.salience_overrides()` computes every
+  candidate's `1.0 + salience` by source, winner or not, ignited or not,
+  and `ModulationCompute.compute()` gained an optional
+  `prior_salience_overrides` parameter that folds it in on top of Phase
+  2's own `"embodiment"` example. `daemon.py` threads last tick's
+  overrides into this tick's `compute()` call — the concrete "sub-threshold
+  candidate still modulates" pathway this phase's gate test exercises.
+- **Two real bugs surfaced during calibration against the actual daemon
+  pipeline**, not caught by hand-picked-value unit tests alone:
+  1. `ignition_threshold`'s mood term had an inverted sign — `- mood *
+     MOOD_GAIN` makes a *negative* mood *raise* the threshold, backwards
+     from the documented "negative mood lowers the bar." Fixed to mirror
+     `modulation.py`'s existing `max(0.0, -mood)` idiom (only a bad mood
+     matters; a good mood doesn't raise the bar above the arousal-only
+     baseline).
+  2. `precision` was first computed as `clamp01(1 - mean_variance)`.
+     `interoception/inference.py`'s EWMA variance is unbounded — a noisy
+     channel (e.g. `latency_strain` under injected jitter) can push its
+     variance well past `1.0` — so this hard-zeroed precision exactly when
+     the arbiter most needed a real confidence signal. Replaced with a
+     saturating `1/(1+variance)` transform, which degrades gracefully
+     instead of clamping to a hard floor.
+- **`RegisterState.goal_gradient` stays a perpetual `0.0` placeholder.**
+  `embodiment/sensors.py`'s own Phase 1 comment had named "Phase 5" as
+  where it'd be wired; it turns out the workspace arbiter doesn't need a
+  real goal-gradient value itself, and building one now with no goal
+  representation yet (self-model, still Phase 7+) would mean fabricating
+  a signal with no real basis — exactly the kind of dishonest proxy this
+  project avoids elsewhere. The interoception candidate's `goal_relevance`
+  uses a fixed baseline (`INTEROCEPTION_GOAL_RELEVANCE_BASELINE = 0.5`)
+  instead, matching the memory candidate's own fixed `0.3`. The sensor
+  comment is corrected to point at "once real goal representation exists
+  (self-model/Phase 7+)."
+- **Ignition constants are empirically calibrated**, same posture as Phase
+  3's `N_BASELINE` tuning: `BASE_IGNITION_THRESHOLD=0.3`,
+  `AROUSAL_GAIN=0.2`, `MOOD_GAIN=0.05` were chosen after measuring the real
+  daemon pipeline's actual salience range (idle: exactly `0.0`; sustained
+  high-arousal jitter: roughly `0.1`–`0.19`), not picked in the abstract —
+  `PLAN.md` only specifies the qualitative shape ("lower under stress"),
+  not exact values.
+
+Gate test: `tests/test_gates/test_phase5.py` — the literal gate
+"Sub-threshold candidate demonstrably modulates but never
+broadcasts/reports," as two independent halves. NEVER-BROADCASTS: a
+sub-threshold winner's content never reaches a rendered prompt via
+`render_prompt_if_ignited()`, contrasted with a supra-threshold winner
+whose content does reach one (proving the function isn't vacuously always
+`None`). DEMONSTRABLY-MODULATES: that same losing/sub-threshold
+candidate's salience changes `ModulationParams.salience_weight_overrides`
+on the next tick's `compute()` call regardless of never being broadcast.
