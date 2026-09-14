@@ -39,7 +39,7 @@ class LogSink:
             "FROM log_event WHERE session_id = ? ORDER BY log_id",
             (session_id,),
         )
-        rows = await cursor.fetchall()
+        rows = list(await cursor.fetchall())
         path = Path(out_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w") as f:

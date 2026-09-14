@@ -86,17 +86,46 @@ async def test_phase1_register_samples_carry_real_moving_values(
         "jittered dt_real, not stay flat like Phase 0's placeholder"
     )
 
-    cursor = await conn.execute(
-        "SELECT DISTINCT rs.inferred_var FROM register_sample rs "
-        "JOIN tick t ON rs.tick_id = t.tick_id "
-        "WHERE t.session_id = ? AND rs.channel = 'latency_strain'",
-        (daemon.session_id,),
-    )
-    rows = await cursor.fetchall()
-    distinct_inferred_vars = {row[0] for row in rows}
-    assert distinct_inferred_vars != {0.0}, (
-        "latency_strain inferred_var should reflect a live EWMA filter, "
-        "not the old always-zero placeholder"
+    # `inferred_var != {0.0}` alone is no longer a useful discriminator: since
+    # inference.py's `INITIAL_VARIANCE`/`PROCESS_NOISE` fix, EVERY channel's
+    # variance settles at a nonzero floor, even a channel whose raw input
+    # never changes (e.g. `budget_reserve`, always 1.0) -- that floor works
+    # out to (1 - ALPHA) * (floor + PROCESS_NOISE) = floor, i.e.
+    # floor = PROCESS_NOISE * (1 - ALPHA) / ALPHA ~= 0.0233 with this
+    # module's current constants. So a dead/placeholder channel would pass
+    # a bare "!= {0.0}" check too, which is exactly the failure mode this
+    # gate exists to catch.
+    #
+    # What actually distinguishes "inference is live on real data" from
+    # "the filter is just idling at its constant-input floor" is that a
+    # channel whose raw input genuinely varies tick to tick should settle
+    # at a HIGHER final variance than that floor, because the EWMA's
+    # `ALPHA * (raw - prior_mean) ** 2` residual term keeps injecting real
+    # variance on top of PROCESS_NOISE. `latency_strain` moves under the
+    # jittered `dt_real` above; `budget_reserve`'s raw sample is hardcoded
+    # to a constant 1.0 (see `teic/embodiment/sensors.py`), so it's the
+    # exact "constant-input floor" reference case. If inference silently
+    # stopped running on `latency_strain` (e.g. reverted to a placeholder,
+    # or fed a constant), its final variance would collapse to the same
+    # floor as `budget_reserve` and this comparison would fail.
+    async def _final_inferred_var(channel: str) -> float:
+        cur = await conn.execute(
+            "SELECT rs.inferred_var FROM register_sample rs "
+            "JOIN tick t ON rs.tick_id = t.tick_id "
+            "WHERE t.session_id = ? AND rs.channel = ? "
+            "ORDER BY t.tick_index DESC LIMIT 1",
+            (daemon.session_id, channel),
+        )
+        (value,) = await cur.fetchone()  # type: ignore[misc]
+        return float(value)
+
+    latency_final_var = await _final_inferred_var("latency_strain")
+    budget_final_var = await _final_inferred_var("budget_reserve")
+    assert latency_final_var > budget_final_var, (
+        "latency_strain's final inferred_var should sit meaningfully above "
+        "budget_reserve's constant-input variance floor, reflecting a live "
+        "EWMA filter reacting to genuinely moving raw data -- not just an "
+        "idling filter that settled at the same floor a dead channel would"
     )
 
     await daemon.stop()

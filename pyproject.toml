@@ -37,4 +37,4 @@ testpaths = ["tests"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["teic/models", "teic/interoception", "teic/workspace", "teic/llm", "teic/embodiment"]
+files = ["teic/models", "teic/interoception", "teic/workspace", "teic/llm", "teic/embodiment", "teic/daemon.py"]

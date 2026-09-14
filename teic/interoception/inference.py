@@ -61,10 +61,14 @@ class ChannelInference:
         return self._state[channel]
 
     def infer(self, raw: RawSensorSample, tick_id: int, ts: datetime) -> RegisterState:
+        # `.model_dump()` once, rather than per-channel `getattr(raw, channel)`
+        # with a dynamic string name: the latter types as `Any` under mypy
+        # --strict, silently defeating the `dict[str, float]` contract below.
+        raw_values: dict[str, float] = raw.model_dump()
         values: dict[str, float] = {}
         variances: dict[str, float] = {}
         for channel in REGISTER_CHANNELS:
-            raw_value = getattr(raw, channel)
+            raw_value = raw_values[channel]
             inferred_value, variance = self.update(channel, raw_value)
             values[channel] = inferred_value
             variances[channel] = variance

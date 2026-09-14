@@ -109,6 +109,12 @@ class TeicDaemon:
         register_state = self._channels.process(tick_ctx, tick_id, now)
         raw = self._channels.last_raw
         assert raw is not None
+        # `.model_dump()`/`as_dict()` once, rather than per-channel
+        # `getattr(obj, channel)` with a dynamic string name: the latter
+        # types as `Any` under mypy --strict, silently defeating the
+        # `dict[str, float]` contract these values flow through.
+        raw_values: dict[str, float] = raw.model_dump()
+        register_values: dict[str, float] = register_state.as_dict()
         for channel in REGISTER_CHANNELS:
             await self._conn.execute(
                 "INSERT INTO register_sample (tick_id, channel, raw_value, inferred_value, inferred_var, ts) "
@@ -116,8 +122,8 @@ class TeicDaemon:
                 (
                     tick_id,
                     channel,
-                    getattr(raw, channel),
-                    getattr(register_state, channel),
+                    raw_values[channel],
+                    register_values[channel],
                     register_state.variances[channel],
                     now.isoformat(),
                 ),

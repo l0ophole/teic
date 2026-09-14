@@ -103,6 +103,14 @@ the catalog) and `inclusionai/ling-3.0-flash-vl:free` exist. Kept as-is in
   `register_sample` rows with the actual sampled `raw_value`,
   `inferred_value`, and `inferred_var` per channel -- replacing Phase 0's
   flat-zero placeholders.
+- **Architectural divergence from `PLAN.md`, recorded here rather than left
+  implicit**: `PLAN.md` describes a decoupled `sensor_task` running at a
+  fixed fast cadence separate from the cognitive tick loop. Phase 1's actual
+  implementation samples sensors inline inside `_on_tick` (the cognitive
+  tick), with `SensorArray`'s ring buffer implicitly scoped to tick cadence
+  rather than a faster, independent one. This was this phase's chosen
+  direction, not an accidental slip, but it is a real deviation from the
+  overall plan; the decoupled `sensor_task` is deferred to a later phase.
 - **Scope decision, stated explicitly so it isn't mistaken for a gap**:
   `affect_sample` is left exactly as Phase 0 wrote it (neutral
   placeholder valence/arousal/mood/attractor_label). Affect dynamics and
