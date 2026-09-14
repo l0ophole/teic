@@ -8,29 +8,26 @@
 | 3 — Forward models, prediction error | **Complete** | `docs/plans/phase3-notes.md` |
 | 4 — Memory timescales, decay, consolidation | **Complete** | `docs/plans/phase4-notes.md` |
 | 5 — Workspace arbiter, ignition | **Complete** | `docs/plans/phase5-notes.md` |
-| 6 — Viability, allostasis | **Next** | plan not yet written |
+| 6 — Viability, allostasis | **In progress (cp1 done)** | `docs/plans/phase6-plan.md` |
 | 7 — Self-model, metacognition | Not started | |
 | 8 — Assessment harness + falsifiers | Not started | |
 | 9 — UI (terminal + web) | Not started | |
 
 ## Current state / next step
 
-Phase 5 complete. Workspace arbiter + ignition are live and tested (70
-tests, mypy clean); `render_prompt_if_ignited()` is a verified seam but
-nothing calls it yet, and no OpenRouter call is wired (spend awaits Phase
-6's viability accounting).
+Phase 6 cp1 done: `ViabilityState` model, extended `ViabilitySettings`,
+`ViabilityBudget` ledger, `AllostaticForecaster`. 125 tests, mypy clean.
 
-Next: write `docs/plans/phase6-plan.md` (viability, allostasis) with named
-session checkpoints, then build it per `CLAUDE.md`'s checkpoint protocol.
+Next: resume Phase 6 at checkpoint cp2 (termination-gate) per
+`docs/plans/phase6-plan.md`.
 
 ## How to verify the build so far
 
 ```
-source .venv/bin/activate
-pytest -q          # 70 tests, all phases' gates included
-mypy
-python -m teic     # Ctrl+C; check data/teic.db: tick, register_sample,
-                   # affect_sample, memory_record (tau1), workspace_broadcast rows
+.venv/bin/pytest -q   # 125 tests, all phases' gates included
+.venv/bin/mypy
+python -m teic         # Ctrl+C; check data/teic.db: tick, register_sample,
+                        # affect_sample, memory_record (tau1), workspace_broadcast rows
 ```
 
 ## Completed-phase one-liners
