@@ -15,13 +15,15 @@
 
 ## Current state / next step
 
-Phase 6 cp3 done: viability budget + allostatic forecast wired into
-`daemon.py`'s tick loop end-to-end (real spend via `render_prompt_if_ignited`
-+ `PricingCache`, viability candidate bidding, `replenish()`/
-`TerminationGate` reached only through real arbitration). See
-`docs/plans/phase6-notes.md`.
+Phase 7 cp1 done: `ConfidenceEstimate` model, `teic/selfmodel/build_self_model()`
+constructing `SelfModel` each tick from real `RegisterState`/`AffectState`/
+`ForwardModel` prediction error (not hand-authored); `goal_gradient`
+placeholder resolved into `identity_traits["goal_gradient"]` via mood
+(daemon sensor-wiring deferred to cp3). No metacognition/behavioral wiring
+yet. See `docs/plans/phase7-plan.md`.
 
-Next: begin Phase 7 (self-model, metacognition) per `PLAN.md`'s build order.
+Next: Phase 7 cp2 (metacognitive confidence + modulation/reportability
+wiring) per `docs/plans/phase7-plan.md`.
 
 ## How to verify the build so far
 
