@@ -308,3 +308,84 @@ window without that spike-then-decay shape -- though, per the note above,
 injection even happens in this scenario, so this shows only that it
 doesn't decay from its own elevated level, not that it fails to respond to
 the injected step-change specifically.
+
+### Phase 4 — Memory timescales, power-law decay, consolidation (complete)
+
+Implements `PLAN.md`'s "Power-law retrieval" section
+(`teic/memory/decay.py`, `teic/memory/retrieval.py`) plus the storage/index
+layer (`teic/memory/store.py`, `teic/memory/vector_index.py`,
+`teic/memory/embeddings.py`) and structural consolidation
+(`teic/memory/consolidation.py`) that section's tables presuppose.
+
+- **Honest-proxy-content scope ruling**, the same posture Phase 1's sensors
+  and Phase 3's forward model established for their own layers: there is
+  still no workspace arbiter (Phase 5) or real LLM cognition loop, so there
+  is no `WorkspaceBroadcast` content to remember. `daemon.py`'s `_on_tick`
+  therefore writes one `tau1_working`/`episode` `memory_record` per tick,
+  content = a compact text serialization of that tick's real
+  `RegisterState`/`AffectState` -- genuine, non-fabricated data, but
+  explicitly **not** "the agent remembering a conversation." Every module
+  built this phase is written against the real `MemoryRecord` model with no
+  knowledge of where its content came from, so nothing here needs
+  revisiting once Phase 5 starts writing richer broadcast-derived content
+  through the same `MemoryStore.create()` call.
+- **`retrieval_k`/`retrieval_affect_weight` now have a real consumer.**
+  Phase 2's `ModulationCompute.compute()` computed these
+  `ModulationParams` fields from real inputs with "no consumer yet"
+  recorded in this doc's Phase 2 section. `teic/memory/retrieval.py`'s
+  `rank()` is that consumer: `retrieval_affect_weight` (Phase 2's
+  `_clamp(affect.valence, -1.0, 1.0)`) biases ranking toward
+  mood-congruent memories when positive and away from them when negative
+  -- verified end-to-end (real sqlite-vec kNN, not hand-passed similarity)
+  by `tests/test_gates/test_phase4.py`.
+- **Consolidation is structural, not LLM-summarized**, and stated as a
+  deliberate scope ruling, not a gap: `PLAN.md`'s concurrency model names a
+  `consolidation_task`, but there is still no LLM-backed cognition loop
+  wired into the daemon (same constraint as the content-proxy ruling
+  above). `teic/memory/consolidation.py`'s `consolidate_group()` merges a
+  cluster of low-activation records via a deterministic content join, not
+  an LLM summary. Real LLM-backed summarization is later-phase work that
+  slots into this same function's seam without changing its callers.
+- **Idle-gating is wall-clock, not tick-count** -- the explicit resolution
+  of `PLAN.md`'s own open question #7 ("must be wall-clock-based ... so
+  low-tempo periods don't starve tau4 consolidation disproportionately").
+  `daemon.py`'s background consolidation loop measures `time.monotonic()`
+  against the timestamp of the last `_on_tick` call, not a tick counter.
+  It runs alongside the heartbeat only inside `run()`; `run_n_ticks()`
+  (which every prior gate test drives directly) deliberately does not
+  start it, so no prior test's behavior or timing changed.
+- **`memory_vec` (sqlite-vec virtual table) is created in Python, not
+  `0002_memory.sql`** -- that migration's own header comment deferred this
+  to Phase 4 work, since creating it requires the sqlite-vec extension
+  loaded into the connection first, not expressible in a plain `.sql` file
+  that runs before any Python touches the connection.
+  `teic/memory/vector_index.py`'s `ensure_loaded()`/`ensure_table()` do
+  this idempotently at daemon start, with `distance_metric=cosine`.
+- **`sentence-transformers` device pin is a verified constraint, not a
+  style choice**: `teic/memory/embeddings.py`'s `EmbeddingModel` pins
+  `device="cpu"` because constructing `SentenceTransformer` without it and
+  calling `.encode()` reproduced a real `torch.AcceleratorError` (CUDA
+  kernel mismatch) on the dev machine used to build this phase.
+- **`prospective_commitment` remains untouched.** `0002_memory.sql` also
+  created this table (Layer 0's prospective memory), but `PLAN.md`'s Build
+  Order table does not name prospective memory under Phase 4 -- it belongs
+  with the still-unbuilt retention buffer/specious-present work. This
+  phase does not read or write it at all.
+
+Gate test: `tests/test_gates/test_phase4.py` -- two independent halves per
+the gate's two literal clauses. (1) "activation decay fits power-law, not
+exponential": `decay.py`'s `activation()` is compared at a large `elapsed`
+against an exponential curve matched to agree at `elapsed=0` and
+`elapsed=DECAY_C`, and asserted to be at least 3x larger there -- the
+quantitative heavier-tail signature a polynomial decay has and an
+exponential does not. (2) "retrieval ranking shifts with affect": two
+memories with identical content (so identical `semantic_match` from the
+same query) and identical `activation()` inputs, but opposite
+`(affect_valence, affect_arousal)` tags, are ranked through the full
+`MemoryStore.query()` path (real temp-file SQLite + real sqlite-vec kNN,
+not hand-passed similarity) with opposite-signed `retrieval_affect_weight`,
+and the top-ranked result is asserted to swap between the two calls -- the
+same same-inputs-except-affect, different-output pattern Phase 2's gate
+test used for the modulation pathway. A contrast case with
+`retrieval_affect_weight=0.0` shows the ranking is otherwise stable across
+repeated identical calls, isolating affect (not noise) as what moved it.
