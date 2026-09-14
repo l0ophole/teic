@@ -15,11 +15,14 @@
 
 ## Current state / next step
 
-Phase 6 cp1 done: `ViabilityState` model, extended `ViabilitySettings`,
-`ViabilityBudget` ledger, `AllostaticForecaster`. 125 tests, mypy clean.
+Phase 6 cp2 done: `teic/ethics/termination_gate.py` (config-gated, refuses
+unless both `allow_actual_termination` and `termination_justification` set;
+logs permanently via `LogSink` before firing). `perturbation_caps.py`
+skipped — no perturbation hook exposed yet (Phase 8 not started); revisit
+if the assessment harness needs it. 127 tests, mypy clean.
 
-Next: resume Phase 6 at checkpoint cp2 (termination-gate) per
-`docs/plans/phase6-plan.md`.
+Next: resume Phase 6 at checkpoint cp3 (integration: daemon/arbiter wiring,
+full test_phase6.py, ARCHITECTURE.md) per `docs/plans/phase6-plan.md`.
 
 ## How to verify the build so far
 
