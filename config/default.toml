@@ -1,0 +1,26 @@
+[daemon]
+base_tempo_hz = 1.0
+idle_tempo_hz = 0.2
+max_tempo_hz = 10.0
+db_path = "data/teic.db"
+
+[llm]
+primary_model = "~deepseek/deepseek-v4-flash-latest"
+fallback_model = "inclusionai/ling-3.0-flash-vl:free"
+base_url = "https://openrouter.ai/api/v1"
+request_timeout_s = 30.0
+max_retries = 3
+backoff_base_s = 1.0
+
+[viability]
+monthly_budget_usd = 10.0
+harness_monthly_budget_usd = 5.0
+allow_actual_termination = false
+termination_justification = ""
+
+[research]
+enabled = false
+
+[interface]
+web_host = "127.0.0.1"
+web_port = 8420

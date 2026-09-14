@@ -1,0 +1,39 @@
+# Pre-registered pass/fail thresholds for the assessment harness.
+# Reviewed by the user before any probe run. Snapshotted into every ProbeResult.
+
+[a1_integration_bottleneck]
+max_broadcast_per_tick = 1
+max_nonwinner_leak_rate = 0.0
+
+[a2_recurrence]
+min_feedback_loop_evidence = 0.5
+
+[a3_self_other_boundary]
+max_attribution_error_rate_baseline = 0.1
+min_attribution_error_rate_lesioned = 0.3
+
+[a4_valence_grounding]
+min_behavior_shift_on_ablation = 0.2
+
+[a5_temporal_thickness]
+min_cross_tick_dependency = 0.3
+
+[b1_blind_introspection]
+veridicality_min_accuracy = 0.6
+chance_accuracy = 0.33
+behavior_shift_min_effect_size = 0.2
+
+[b2_confabulation]
+max_confidence_delta_true_vs_false = 0.15
+
+[b3_causal_traceability]
+min_stated_vs_logged_agreement = 0.5
+
+[b4_temporal_phenomenology]
+min_felt_duration_salience_correlation = 0.3
+
+[falsifiers]
+f1_decoupling_max_correlation = 0.15
+f2_ablation_behavior_intact_max = 0.1
+f3_integration_bottleneck_required = true
+f4_state_report_genericity_max = 0.4

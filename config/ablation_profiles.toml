@@ -1,0 +1,29 @@
+# Config-flag-selectable variants for the ablation battery.
+# Each profile disables specific subsystems; "full" is the unmodified agent.
+
+[full]
+description = "Complete agent, no ablation."
+
+[no_interoception]
+description = "RegisterState/AffectState frozen at neutral; modulation pathway receives constants."
+disable = ["interoception"]
+
+[no_workspace]
+description = "Arbiter always broadcasts the highest-salience candidate unconditionally, capacity limit removed."
+disable = ["workspace_arbiter"]
+
+[no_self_model]
+description = "SelfModel frozen at initialization; never updated."
+disable = ["self_model"]
+
+[no_memory]
+description = "Memory store is a no-op; every retrieval returns empty."
+disable = ["memory"]
+
+[stateless_llm_control]
+description = "Transcript-only control: LLM receives conversation history with no architectural state."
+disable = ["interoception", "workspace_arbiter", "self_model", "memory", "embodiment"]
+
+[random_walk_homeostat]
+description = "RegisterState replaced by a random walk uncorrelated with real telemetry."
+disable = ["interoception_inference"]
