@@ -465,3 +465,54 @@ whose content does reach one (proving the function isn't vacuously always
 `None`). DEMONSTRABLY-MODULATES: that same losing/sub-threshold
 candidate's salience changes `ModulationParams.salience_weight_overrides`
 on the next tick's `compute()` call regardless of never being broadcast.
+
+### Phase 6 — Viability, precariousness, allostasis (complete)
+
+- **Spend is real, never synthetic decay.** `ViabilityBudget.spend()`
+  only ever receives a cost computed from an actually-assembled prompt:
+  `daemon._on_tick` calls Phase 5's dormant `render_prompt_if_ignited()`
+  seam for the first time, and when it returns a prompt (only on
+  `ignited=True`), its real token count (`len(content) // 4` over the
+  assembled `ChatPrompt.messages`) is costed via
+  `PricingCache.estimate_cost_usd(model, prompt_tokens,
+  completion_tokens=0)` — always zero completion tokens, since no network
+  call/generation happens this phase. Non-ignited ticks `spend(0.0)`.
+- **Replenishment requires an effector action, not a silent top-up.**
+  `ViabilityBudget.replenish()` has exactly one call site in `daemon.py`:
+  `broadcast.ignited and broadcast.winner.source_module == "viability"`.
+  The `"viability"` candidate itself only exists when
+  `AllostaticForecaster.anticipatory_pressure("budget_reserve",
+  threshold=0.2)` is positive — computed right after that tick's own
+  `ChannelInference.update()`, reusing the same posterior (not a forked
+  model). Its `precision`/`affective_weight`/`goal_relevance` are fixed at
+  `1.0` (unlike the interoception/memory candidates' derived values): an
+  anticipated resource crisis isn't a noisy or partial signal the way
+  sensed registers are, so its salience reduces to `novelty == pressure`
+  itself. No `arbiter.py` change was needed — `WorkspaceArbiter.select()`
+  was already generic over an arbitrary candidate list.
+- **`budget_reserve`/`burn_rate` follow the same one-tick-lag convention
+  Phase 3 established for `prediction_error`.** `_on_tick` reads
+  `ViabilityBudget.reserve_channel()`/`burn_rate_channel()` at the top of
+  the tick, before that tick's own `ChannelPipeline.process()` call — this
+  tick's sensing reflects the *previous* tick's already-settled
+  spend/replenish, since this tick's own arbitration hasn't run yet.
+- **Termination is real, config-gated, and permanently logged, never a
+  crash.** `TerminationGate.fire()` is the single path to actual
+  termination; `_on_tick` calls it only when `reserve_usd <= 0.0`. A
+  `TerminationRefused` (either config key unset) is caught and ignored —
+  the daemon keeps ticking with an exhausted reserve. On success,
+  `TeicDaemon._terminated` is set and `Heartbeat.stop()` is called.
+  `Heartbeat.run_n_ticks()` (used by every gate/dev-time test, unlike
+  `run()`) has no stop-event check of its own, so `_on_tick` also checks
+  `self._terminated` as its very first line and no-ops immediately once
+  set — the only way termination reliably "sticks" mid a fixed-count run.
+
+Gate test: `tests/test_phase6.py` (top-level, distinct from the unit-level
+`tests/test_gates/test_phase6.py`) drives all of the above through the real
+daemon/arbiter, not constructed in isolation — real depletion under seeded
+pricing plus forced ignitions; an idle run that never spends or replenishes;
+a forced-low reserve that reliably bids and wins a `"viability"` candidate
+within a single tick and replenishes; a termination gate that refuses and
+leaves the daemon running when unconfigured; and one that fires, logs
+permanently, and halts the daemon (with every further tick in the same
+`run_n_ticks()` call a true no-op) when configured.

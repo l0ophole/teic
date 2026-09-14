@@ -8,26 +8,25 @@
 | 3 — Forward models, prediction error | **Complete** | `docs/plans/phase3-notes.md` |
 | 4 — Memory timescales, decay, consolidation | **Complete** | `docs/plans/phase4-notes.md` |
 | 5 — Workspace arbiter, ignition | **Complete** | `docs/plans/phase5-notes.md` |
-| 6 — Viability, allostasis | **In progress (cp1 done)** | `docs/plans/phase6-plan.md` |
+| 6 — Viability, allostasis | **Complete** | `docs/plans/phase6-notes.md` |
 | 7 — Self-model, metacognition | Not started | |
 | 8 — Assessment harness + falsifiers | Not started | |
 | 9 — UI (terminal + web) | Not started | |
 
 ## Current state / next step
 
-Phase 6 cp2 done: `teic/ethics/termination_gate.py` (config-gated, refuses
-unless both `allow_actual_termination` and `termination_justification` set;
-logs permanently via `LogSink` before firing). `perturbation_caps.py`
-skipped — no perturbation hook exposed yet (Phase 8 not started); revisit
-if the assessment harness needs it. 127 tests, mypy clean.
+Phase 6 cp3 done: viability budget + allostatic forecast wired into
+`daemon.py`'s tick loop end-to-end (real spend via `render_prompt_if_ignited`
++ `PricingCache`, viability candidate bidding, `replenish()`/
+`TerminationGate` reached only through real arbitration). See
+`docs/plans/phase6-notes.md`.
 
-Next: resume Phase 6 at checkpoint cp3 (integration: daemon/arbiter wiring,
-full test_phase6.py, ARCHITECTURE.md) per `docs/plans/phase6-plan.md`.
+Next: begin Phase 7 (self-model, metacognition) per `PLAN.md`'s build order.
 
 ## How to verify the build so far
 
 ```
-.venv/bin/pytest -q   # 125 tests, all phases' gates included
+.venv/bin/pytest -q   # all phases' gates included
 .venv/bin/mypy
 python -m teic         # Ctrl+C; check data/teic.db: tick, register_sample,
                         # affect_sample, memory_record (tau1), workspace_broadcast rows
@@ -53,3 +52,9 @@ python -m teic         # Ctrl+C; check data/teic.db: tick, register_sample,
   threshold, 2 bugs found during calibration and documented),
   `mineness_tag`, `render_prompt_if_ignited` seam; two real candidate
   sources; ignition constants calibrated to the real pipeline.
+- Phase 6: `ViabilityBudget` (real spend/replenish ledger) +
+  `AllostaticForecaster` (shared-posterior trend forecast) +
+  `TerminationGate` (config-gated, permanently logged); daemon wires real
+  spend through `render_prompt_if_ignited`/`PricingCache`, bids a
+  `"viability"` candidate on anticipatory pressure, replenishes only on
+  that candidate winning + igniting, terminates only through the gate.

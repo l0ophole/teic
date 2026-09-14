@@ -27,9 +27,10 @@ class TerminationGate:
 
     async def fire(self, session_id: str, tick_id: int, reason: str) -> None:
         """Attempt termination. Raises TerminationRefused and writes nothing
-        if the settings gate isn't fully configured. Never called from the
-        tick loop directly on reserve == 0 -- the caller decides whether
-        zero reserve warrants invoking this."""
+        if the settings gate isn't fully configured. Called from
+        `teic.daemon.TeicDaemon._on_tick` when the viability reserve hits
+        zero (cp3 wiring) -- a refusal is caught there and simply leaves the
+        daemon running with an exhausted reserve, never a crash."""
         if not self._settings.allow_actual_termination or not self._settings.termination_justification:
             raise TerminationRefused(
                 "termination refused: allow_actual_termination and "

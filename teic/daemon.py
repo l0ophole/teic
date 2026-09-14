@@ -72,6 +72,30 @@ The interoception candidate's `goal_relevance` uses a fixed baseline
 representation exists (self-model/Phase 7+; see `embodiment/sensors.py`),
 and multiplying salience by an always-zero term would zero it in every
 real run.
+
+Phase 6: `_on_tick` now reads the real `ViabilityBudget` ledger's
+`reserve_channel()`/`burn_rate_channel()` *before* this tick's own sensing
+-- the same one-tick-lag pattern Phase 3 established for `prediction_error`,
+since this tick's own spend/replenish outcome isn't known until after
+arbitration. `AllostaticForecaster.anticipatory_pressure()` (sharing
+`ChannelPipeline.inference`, not a forked model) runs right after that
+sensing and, when positive, adds a real `"viability"` `WorkspaceCandidate`
+to the arbitration pool -- the mechanism behind "regulation is visible as
+agent behavior, not a background cron job." After arbitration,
+`render_prompt_if_ignited()` (Phase 5's seam) is finally exercised: an
+ignited broadcast's real assembled prompt is costed via
+`teic.llm.cost.PricingCache.estimate_cost_usd()` and charged to the ledger
+via `spend()` -- no network call is made (that integration stays out of
+scope for this phase's task list), so only prompt tokens are charged, never
+completion tokens. If the ignited winner is the `"viability"` candidate
+itself, that is the one and only path that calls `replenish()` -- an
+explicit, workspace-arbitrated effector action, not a silent top-up. If the
+ledger's `reserve_usd` hits zero, `_on_tick` calls `TerminationGate.fire()`;
+a refusal (unconfigured settings) is caught and logged nowhere further (the
+gate itself writes nothing on refusal), while a successful fire sets
+`self._terminated` and stops the heartbeat. `self._terminated` also makes
+`_on_tick` a no-op on any further call, since `Heartbeat.run_n_ticks()`
+(unlike `run()`) has no stop-event check of its own.
 """
 
 from __future__ import annotations
@@ -86,10 +110,14 @@ from datetime import UTC, datetime
 import aiosqlite
 
 from teic.embodiment.forward_model import ForwardModel
+from teic.ethics.termination_gate import TerminationGate, TerminationRefused
 from teic.interoception.affect_dynamics import AffectDynamics
+from teic.interoception.allostasis import AllostaticForecaster
 from teic.interoception.channels import ChannelPipeline
 from teic.interoception.modulation import ModulationCompute
 from teic.interoception.mood import MoodTracker
+from teic.llm.cost import PricingCache
+from teic.embodiment.viability_budget import ViabilityBudget
 from teic.memory import vector_index
 from teic.memory.consolidation import IDLE_THRESHOLD_S, run_consolidation_pass
 from teic.memory.embeddings import get_default_model
@@ -104,6 +132,7 @@ from teic.settings import Settings
 from teic.temporal.heartbeat import Heartbeat
 from teic.temporal.protention import ProtentionBuffer, ProtentionEntry
 from teic.workspace.arbiter import WorkspaceArbiter, salience_overrides
+from teic.workspace.broadcast import render_prompt_if_ignited
 
 # How often the background consolidation loop checks wall-clock idle time.
 CONSOLIDATION_POLL_INTERVAL_S = 5.0
@@ -115,6 +144,18 @@ CONSOLIDATION_POLL_INTERVAL_S = 5.0
 # run. Use a fixed baseline instead, same honest-baseline pattern as the
 # "memory" candidate's own fixed goal_relevance below.
 INTEROCEPTION_GOAL_RELEVANCE_BASELINE = 0.5
+
+# Below this normalized budget_reserve value, the forecaster's anticipated
+# crossing is treated as worth bidding into the workspace over. Matches the
+# threshold exercised by the cp1 gate test
+# (tests/test_gates/test_phase6.py::test_allostatic_forecast_raises_pressure_before_actual_violation).
+VIABILITY_PRESSURE_THRESHOLD = 0.2
+
+# The viability candidate's precision/affective_weight/goal_relevance are
+# fixed at 1.0 (unlike the interoception/memory candidates' derived values)
+# -- an anticipated resource crisis is not a noisy or partial signal the way
+# sensed registers are, so salience reduces to `novelty == pressure` itself.
+VIABILITY_GOAL_RELEVANCE_BASELINE = 1.0
 
 
 def _clamp01(x: float) -> float:
@@ -140,6 +181,11 @@ class TeicDaemon:
         self._latest_tick_id: int | None = None
         self._arbiter: WorkspaceArbiter | None = None
         self._prior_salience_overrides: dict[str, float] | None = None
+        self._viability_budget: ViabilityBudget | None = None
+        self._allostasis: AllostaticForecaster | None = None
+        self._termination_gate: TerminationGate | None = None
+        self._pricing: PricingCache | None = None
+        self._terminated: bool = False
 
     @property
     def session_id(self) -> str:
@@ -175,6 +221,14 @@ class TeicDaemon:
         self._forward_model = ForwardModel()
         self._arbiter = WorkspaceArbiter()
         self._protention = ProtentionBuffer()
+        self._viability_budget = ViabilityBudget(self._settings.viability)
+        self._allostasis = AllostaticForecaster(
+            self._channels.inference, horizon_ticks=self._settings.viability.forecast_horizon_ticks
+        )
+        assert self._log_sink is not None
+        self._termination_gate = TerminationGate(self._settings.viability, self._log_sink)
+        self._pricing = PricingCache()
+        self._pricing.load_from_disk()
         await vector_index.ensure_loaded(self._conn)
         await vector_index.ensure_table(self._conn)
         self._memory_store = MemoryStore(self._conn, get_default_model())
@@ -223,6 +277,11 @@ class TeicDaemon:
                 )
 
     async def _on_tick(self, tick_index: int, dt_real: float) -> None:
+        if self._terminated:
+            # Heartbeat.run_n_ticks() has no stop-event check of its own
+            # (unlike run()) -- this flag is what keeps a terminated daemon
+            # inert for the remainder of a fixed-count test/dev run.
+            return
         assert self._conn is not None
         assert self._channels is not None
         assert self._affect_dynamics is not None
@@ -231,6 +290,10 @@ class TeicDaemon:
         assert self._forward_model is not None
         assert self._protention is not None
         assert self._arbiter is not None
+        assert self._viability_budget is not None
+        assert self._allostasis is not None
+        assert self._termination_gate is not None
+        assert self._pricing is not None
         now = datetime.now(UTC)
         tempo_hz = self._current_tempo_hz
 
@@ -263,8 +326,19 @@ class TeicDaemon:
             idle_state=False,
             pending_input_count=0,
         )
+        # Phase 6: read the ledger's own state *before* this tick's sensing
+        # -- reflects the outcome of the *previous* tick's spend/replenish,
+        # since this tick's own arbitration hasn't happened yet. Same
+        # one-tick-lag pattern as prediction_error above.
+        budget_reserve = self._viability_budget.reserve_channel()
+        burn_rate = self._viability_budget.burn_rate_channel()
         register_state = self._channels.process(
-            tick_ctx, tick_id, now, prediction_error=prediction_error
+            tick_ctx,
+            tick_id,
+            now,
+            prediction_error=prediction_error,
+            budget_reserve=budget_reserve,
+            burn_rate=burn_rate,
         )
         raw = self._channels.last_raw
         assert raw is not None
@@ -334,6 +408,27 @@ class TeicDaemon:
             goal_relevance=INTEROCEPTION_GOAL_RELEVANCE_BASELINE,
         )
         candidates = [interoception_candidate]
+
+        # Phase 6: anticipatory pressure bids a real candidate into the
+        # workspace -- the mechanism behind "regulation is visible as agent
+        # behavior, not a background cron job." Computed right after this
+        # tick's own ChannelInference.update() (inside process() above), so
+        # the posterior it reads is current.
+        pressure = self._allostasis.anticipatory_pressure(
+            "budget_reserve", threshold=VIABILITY_PRESSURE_THRESHOLD, lower_is_worse=True
+        )
+        if pressure > 0.0:
+            candidates.append(
+                WorkspaceCandidate(
+                    source_module="viability",
+                    content={"pressure": pressure, "channel": "budget_reserve", "tick_id": tick_id},
+                    novelty=_clamp01(pressure),
+                    precision=1.0,
+                    affective_weight=1.0,
+                    goal_relevance=VIABILITY_GOAL_RELEVANCE_BASELINE,
+                )
+            )
+
         memory_results = await self._memory_store.query(
             session_id=self._session_id,
             query_text=content,
@@ -369,6 +464,43 @@ class TeicDaemon:
         )
         await self._conn.commit()
         self._prior_salience_overrides = salience_overrides(candidates, broadcast.winner)
+
+        # Phase 6: the real send-costing path through Phase 5's
+        # render_prompt_if_ignited() seam. No network call is made (out of
+        # this checkpoint's scope) -- only the real assembled prompt's token
+        # count is charged, never completion tokens, since none are ever
+        # generated here.
+        prompt = render_prompt_if_ignited(broadcast, [], modulation_params)
+        if prompt is not None:
+            prompt_tokens = sum(len(m["content"]) for m in prompt.messages) // 4
+            cost_usd = self._pricing.estimate_cost_usd(
+                self._settings.llm.primary_model, prompt_tokens, completion_tokens=0
+            )
+            self._viability_budget.spend(cost_usd)
+        else:
+            self._viability_budget.spend(0.0)
+
+        # Termination is checked against the reserve as spend() actually
+        # left it, before any same-tick replenishment can mask a real
+        # depletion -- replenish() is pre-emptive self-regulation (fired
+        # from anticipatory pressure crossing threshold before reserve
+        # reaches zero), not a resurrection path once it's already there.
+        if self._viability_budget.reserve_usd <= 0.0 and not self._terminated:
+            try:
+                await self._termination_gate.fire(
+                    self._session_id, tick_id, reason="viability reserve depleted"
+                )
+            except TerminationRefused:
+                pass
+            else:
+                self._terminated = True
+                assert self._heartbeat is not None
+                self._heartbeat.stop()
+
+        # The one and only replenish() call site: an explicit,
+        # workspace-arbitrated effector action, never a silent top-up.
+        if broadcast.ignited and broadcast.winner.source_module == "viability":
+            self._viability_budget.replenish()
 
         await self._memory_store.create(
             session_id=self._session_id,

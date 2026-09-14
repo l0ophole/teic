@@ -73,7 +73,13 @@ class SensorArray:
     def __init__(self) -> None:
         self._latency_history: deque[float] = deque(maxlen=_LATENCY_HISTORY_LEN)
 
-    def sample(self, tick_ctx: TickContext, prediction_error: float = 0.0) -> RawSensorSample:
+    def sample(
+        self,
+        tick_ctx: TickContext,
+        prediction_error: float = 0.0,
+        budget_reserve: float = 1.0,
+        burn_rate: float = 0.0,
+    ) -> RawSensorSample:
         # Not guarded against tempo_hz == 0.0: every producer of TickContext
         # in this codebase (Heartbeat) takes tempo_hz as a positive-Hz
         # config value, so a zero tempo would already be a misconfiguration
@@ -89,8 +95,12 @@ class SensorArray:
 
         return RawSensorSample(
             context_pressure=context_pressure,
-            budget_reserve=1.0,  # no spend tracking until Phase 6
-            burn_rate=0.0,  # wired in Phase 6 (budget/spend tracking)
+            # Phase 6: threaded in from the caller (teic/daemon.py), same
+            # one-tick-lag pattern as prediction_error -- the real
+            # ViabilityBudget ledger's post-spend state from the *previous*
+            # tick, not computed here.
+            budget_reserve=budget_reserve,
+            burn_rate=burn_rate,
             prediction_error=prediction_error,
             surprise_volatility=surprise_volatility,
             effector_integrity=1.0,  # no LLM call attempted yet
