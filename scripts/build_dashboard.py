@@ -1,14 +1,15 @@
 #!/usr/bin/env python
-"""Build dashboard: data loaders + single-frame render (--once).
+"""Build dashboard: data loaders + single-frame render + live TUI loop.
 
-Live TUI loop arrives in Task 3; today main() prints one frame.
 Run with the project venv (rich lives there):
-    .venv/bin/python scripts/build_dashboard.py --once
+    .venv/bin/python scripts/build_dashboard.py          # live TUI (q quits)
+    .venv/bin/python scripts/build_dashboard.py --once   # one frame and exit
 """
 from __future__ import annotations
 
 import argparse
 import json
+import select
 import sys
 import time
 from datetime import datetime
@@ -17,6 +18,7 @@ from pathlib import Path
 try:
     from rich.console import Console
     from rich.console import Group
+    from rich.live import Live
     from rich.table import Table
     from rich.text import Text
 except ImportError:
@@ -26,6 +28,9 @@ from orchestrate_build import (CURRENT_FILE, DEFAULT_TIMEOUT_S, HISTORY_FILE,
                                STATE_FILE, USAGE_FILE, parse_checkpoints)
 
 WINDOW_ORDER = ["five_hour", "seven_day"]
+
+TICK_SECONDS = 2.0
+QUIT_KEYS = {"q"}
 
 
 # ------------------------------------------------------------------ formatting
@@ -304,15 +309,45 @@ def render_frame(state_path: Path = STATE_FILE, usage_path: Path = USAGE_FILE,
     )
 
 
+def wants_quit(char) -> bool:
+    """True if the raw char read from stdin is a quit key."""
+    return char is not None and char in QUIT_KEYS
+
+
+def run_live(console: Console) -> None:
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        with Live(render_frame(), console=console,
+                  refresh_per_second=0.5, screen=True) as live:
+            while True:
+                readable, _, _ = select.select(
+                    [sys.stdin], [], [], TICK_SECONDS)
+                if readable:
+                    char = sys.stdin.read(1)
+                    if wants_quit(char):
+                        break
+                live.update(render_frame())
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build dashboard")
     parser.add_argument("--once", action="store_true",
                         help="render one frame and exit")
     args = parser.parse_args()
     console = Console()
-    console.print(render_frame())
-    if not args.once:
-        console.print(_dim("(live mode arrives in Task 3)"))
+    if args.once or not sys.stdin.isatty():
+        console.print(render_frame())
+        if not args.once:
+            console.print(_dim("(stdin is not a tty; live mode unavailable)"))
+        return
+    run_live(console)
 
 
 if __name__ == "__main__":

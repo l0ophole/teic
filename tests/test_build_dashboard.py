@@ -195,3 +195,19 @@ def test_render_frame_survives_corrupt_state_file(tmp_path: Path):
         current_path=tmp_path / "current.json",
     )
     assert frame is not None
+
+
+# ---------------------------------------------------------------- live loop
+
+def test_wants_quit_q_and_Q_variants():
+    assert bd.wants_quit("q") is True
+
+
+def test_wants_quit_other_chars_and_none():
+    assert bd.wants_quit("x") is False
+    assert bd.wants_quit("\x03") is False  # Ctrl+C handled via KeyboardInterrupt
+    assert bd.wants_quit(None) is False
+
+
+def test_tick_seconds_is_two():
+    assert bd.TICK_SECONDS == 2.0
