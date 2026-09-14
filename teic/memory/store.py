@@ -6,6 +6,7 @@ established for `ForwardModel` vs. `daemon.py`.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import aiosqlite
@@ -14,7 +15,7 @@ from teic.memory import vector_index
 from teic.memory.decay import touch
 from teic.memory.embeddings import EmbeddingModel
 from teic.memory.retrieval import ScoredMemory, rank
-from teic.models.memory import ContentKind, MemoryRecord, Timescale
+from teic.models.memory import ConsolidationEvent, ContentKind, MemoryRecord, Timescale
 
 _COLUMNS = (
     "memory_id, session_id, timescale, content, content_kind, created_tick_id, "
@@ -154,6 +155,20 @@ class MemoryStore:
         await self._conn.execute(
             "UPDATE memory_record SET superseded_by = ? WHERE memory_id = ?",
             (superseded_by, memory_id),
+        )
+        await self._conn.commit()
+
+    async def record_consolidation_event(self, event: ConsolidationEvent) -> None:
+        await self._conn.execute(
+            "INSERT INTO consolidation_event (session_id, tick_id, source_memory_ids, result_memory_id, trigger) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                event.session_id,
+                event.tick_id,
+                json.dumps(event.source_memory_ids),
+                event.result_memory_id,
+                event.trigger,
+            ),
         )
         await self._conn.commit()
 

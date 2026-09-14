@@ -19,6 +19,8 @@ here to "after the model has had time to recover from the jitter").
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from teic.daemon import TeicDaemon
@@ -92,5 +94,49 @@ async def test_prediction_error_reacts_to_jitter_then_settles(tmp_settings: Sett
             f"tick {tick_index}: expected prediction_error to have settled "
             f"back near 0.0 well after the jitter, got {by_tick[tick_index]}"
         )
+
+    await daemon.stop()
+
+
+@pytest.mark.asyncio
+async def test_run_n_ticks_writes_memory_and_returns_promptly(tmp_settings: Settings) -> None:
+    """Phase 4: one tau1_working memory_record row per tick, and
+    run_n_ticks() (used by every gate test) completes promptly -- it does
+    not start/wait on the background consolidation loop, which only run()
+    does. Uses the same injected fake time_source/sleep_fn DI pattern as
+    the jitter test above so this doesn't burn real wall-clock seconds
+    waiting on the heartbeat's own tick interval."""
+    daemon = TeicDaemon(tmp_settings)
+    await daemon.start()
+
+    fake_clock = {"t": 0.0}
+
+    async def fake_sleep(seconds: float) -> None:
+        fake_clock["t"] += seconds
+
+    fake_heartbeat = Heartbeat(
+        tempo_hz=tmp_settings.daemon.base_tempo_hz,
+        on_tick=daemon._on_tick,
+        time_source=lambda: fake_clock["t"],
+        sleep_fn=fake_sleep,
+    )
+
+    n = 5
+    start = time.monotonic()
+    await fake_heartbeat.run_n_ticks(n)
+    elapsed = time.monotonic() - start
+
+    from teic.memory.consolidation import IDLE_THRESHOLD_S
+
+    assert elapsed < IDLE_THRESHOLD_S
+
+    conn = daemon.conn
+    cursor = await conn.execute(
+        "SELECT COUNT(*) FROM memory_record WHERE session_id = ? AND timescale = 'tau1_working'",
+        (daemon.session_id,),
+    )
+    row = await cursor.fetchone()
+    assert row is not None
+    assert row[0] == n
 
     await daemon.stop()

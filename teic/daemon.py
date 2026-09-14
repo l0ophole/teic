@@ -32,11 +32,29 @@ carry-forward of this tick's register vector) for the next tick to resolve.
 This still isn't a real effector-latency forward model -- tick timing
 stands in for it, since no LLM/tool call exists yet to have latency of its
 own -- that's Phase 5+.
+
+Phase 4: `_on_tick` now writes one real `tau1_working`/`episode`
+`memory_record` per tick via `MemoryStore.create()`, content = a compact
+text serialization of that tick's `RegisterState`/`AffectState`. This is
+real, non-fabricated data, but it is explicitly **not** "the agent
+remembering a conversation" -- there is still no workspace arbiter (Phase 5)
+producing real broadcast content worth remembering, so this is the same
+honest-proxy-content pattern Phase 1's sensors and Phase 3's forward model
+established for their own layers. `run()` (not `run_n_ticks()`, which every
+prior gate test drives directly and which stays synchronous/unmodified)
+also starts a background wall-clock-idle-gated consolidation loop
+(`teic/memory/consolidation.py`) that periodically checks whether enough
+real time has passed since the last tick and, if so, structurally merges
+(not LLM-summarizes -- no cognition loop exists yet either) stale
+low-activation memories into a `tau4_consolidated` record.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -47,6 +65,10 @@ from teic.interoception.affect_dynamics import AffectDynamics
 from teic.interoception.channels import ChannelPipeline
 from teic.interoception.modulation import ModulationCompute
 from teic.interoception.mood import MoodTracker
+from teic.memory import vector_index
+from teic.memory.consolidation import IDLE_THRESHOLD_S, run_consolidation_pass
+from teic.memory.embeddings import get_default_model
+from teic.memory.store import MemoryStore
 from teic.models.affect import AffectState
 from teic.models.registers import REGISTER_CHANNELS
 from teic.models.tick import TickContext
@@ -55,6 +77,9 @@ from teic.persistence.log_sink import LogSink
 from teic.settings import Settings
 from teic.temporal.heartbeat import Heartbeat
 from teic.temporal.protention import ProtentionBuffer, ProtentionEntry
+
+# How often the background consolidation loop checks wall-clock idle time.
+CONSOLIDATION_POLL_INTERVAL_S = 5.0
 
 
 class TeicDaemon:
@@ -71,6 +96,9 @@ class TeicDaemon:
         self._forward_model: ForwardModel | None = None
         self._protention: ProtentionBuffer | None = None
         self._current_tempo_hz: float = 0.0
+        self._memory_store: MemoryStore | None = None
+        self._last_tick_wall_ts: float | None = None
+        self._latest_tick_id: int | None = None
 
     @property
     def session_id(self) -> str:
@@ -105,6 +133,9 @@ class TeicDaemon:
         )
         self._forward_model = ForwardModel()
         self._protention = ProtentionBuffer()
+        await vector_index.ensure_loaded(self._conn)
+        await vector_index.ensure_table(self._conn)
+        self._memory_store = MemoryStore(self._conn, get_default_model())
 
     async def stop(self) -> None:
         if self._heartbeat is not None:
@@ -123,8 +154,31 @@ class TeicDaemon:
         await self._heartbeat.run_n_ticks(n)
 
     async def run(self) -> None:
+        """Runs the heartbeat plus a background wall-clock-idle-gated
+        consolidation loop concurrently, for as long as the heartbeat runs.
+        `run_n_ticks()` (used by every gate test) deliberately does **not**
+        start this loop -- it stays synchronous/unmodified so no prior gate
+        test's behavior changes."""
         assert self._heartbeat is not None, "call start() first"
-        await self._heartbeat.run()
+        consolidation_task = asyncio.create_task(self._consolidation_loop())
+        try:
+            await self._heartbeat.run()
+        finally:
+            consolidation_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await consolidation_task
+
+    async def _consolidation_loop(self) -> None:
+        assert self._memory_store is not None
+        while True:
+            await asyncio.sleep(CONSOLIDATION_POLL_INTERVAL_S)
+            if self._last_tick_wall_ts is None or self._latest_tick_id is None:
+                continue
+            idle_for = time.monotonic() - self._last_tick_wall_ts
+            if idle_for >= IDLE_THRESHOLD_S:
+                await run_consolidation_pass(
+                    self._memory_store, self._session_id, self._latest_tick_id
+                )
 
     async def _on_tick(self, tick_index: int, dt_real: float) -> None:
         assert self._conn is not None
@@ -205,6 +259,27 @@ class TeicDaemon:
             ),
         )
         await self._conn.commit()
+
+        # Phase 4: honest-proxy-content memory write -- see module
+        # docstring's Phase 4 paragraph for why this is real interoceptive
+        # data, not real cognition/broadcast content.
+        assert self._memory_store is not None
+        content = f"tick {tick_id}: valence={affect_state.valence:.3f} arousal={affect_state.arousal:.3f} " + " ".join(
+            f"{channel}={value:.3f}" for channel, value in register_values.items()
+        )
+        await self._memory_store.create(
+            session_id=self._session_id,
+            timescale="tau1_working",
+            content=content,
+            content_kind="episode",
+            created_tick_id=tick_id,
+            base_activation=1.0,
+            decay_alpha=0.5,
+            affect_valence=affect_state.valence,
+            affect_arousal=affect_state.arousal,
+        )
+        self._last_tick_wall_ts = time.monotonic()
+        self._latest_tick_id = tick_id
 
         # Phase 3: predict the *next* tick's dt_real (using the tempo
         # that will actually be in effect for it) and interoceptive
