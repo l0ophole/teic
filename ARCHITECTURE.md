@@ -216,3 +216,74 @@ and re-verifies the literal gate wording against them: byte-identical
 `assemble_prompt` output text for a shared broadcast/narrative_tail, with
 divergent `temperature`/`tempo_hz`/`speak_gate_open`. Per this phase's gate
 wording, no assertion is made about real LLM calls or generated text.
+
+### Phase 3 — Forward model, protention buffer, prediction error (complete)
+
+`prediction_error` becomes a real, learned signal instead of Phases 0-2's
+flat `0.0` placeholder, closing the daemon's first predict/observe loop.
+
+- `teic/embodiment/forward_model.py`: `ForwardModel` predicts the next
+  tick's `dt_real` by scaling the nominal tick period (`1 / tempo_hz`) by
+  an adaptive multiplier, learned via a fixed-gain EWMA (`ALPHA = 0.3`,
+  same convention as `interoception/inference.py`) over the ratio of
+  actual to nominal timing. `observe()` computes the error against the
+  *prior* (not-yet-updated) prediction before updating the multiplier, so a
+  step-change in timing produces a genuine error spike followed by decay
+  as the multiplier re-learns, rather than an instantly-perfect prediction.
+  **Scope ruling, recorded explicitly**: tick timing stands in for effector
+  latency (the time a tool call would take) -- there is no real LLM/tool
+  effector wired into the daemon yet to have latency of its own. A real
+  per-effector forward model (or a parallel model alongside this one) is
+  Phase 5+ work, once effectors exist.
+- `teic/temporal/protention.py`: `ProtentionEntry` is a timestamped
+  one-step-ahead prediction (forecasted `dt_real` plus a naive one-step
+  carry-forward of the current tick's inferred register vector -- the EWMA
+  filter's current mean is already its best forecast absent new evidence,
+  so no separate per-channel forecaster is needed). `ProtentionBuffer` is a
+  **single-slot, in-memory** holder for exactly zero or one such entry --
+  not a ring buffer or queue, and not persisted to SQLite. This is a
+  scope ruling, not an oversight: Phase 3's protention horizon is exactly
+  one tick ahead, and there is no protention table in the locked migration
+  list (`teic/persistence/migrations/`) -- a multi-step or persisted
+  horizon is a future extension if a later phase needs one, not a current
+  gap.
+- `teic/daemon.py`: `_on_tick` now, before its own sensing, pops the
+  prediction made at the end of the *previous* tick (if any) and resolves
+  it against this tick's actual `dt_real` via `ForwardModel.observe()`,
+  producing the `prediction_error` fed into this tick's `ChannelPipeline`.
+  After this tick's own processing, it predicts the *next* tick's
+  `dt_real` via `ForwardModel.predict_dt_real()` (using the tempo that
+  will actually be in effect for that next tick) and pushes a new
+  `ProtentionEntry` for the following tick to resolve. `ProtentionEntry`
+  also carries `predicted_registers` -- captured every tick, but with **no
+  consumer yet**: it exists so a later phase (Phase 4+'s retrieval/
+  consolidation work is the natural candidate) can compare predicted vs.
+  actual interoceptive trajectories, not because anything reads it today.
+- **Contrast with `latency_strain`, the concrete evidence this is new,
+  not a relabeling**: `embodiment/sensors.py`'s `latency_strain` is a
+  fixed-expectation signal -- `|dt_real - (1 / tempo_hz)| / (1 / tempo_hz)`,
+  with no learning -- so a sustained step-change in timing leaves it
+  permanently elevated with no decay. `prediction_error` uses the same
+  kind of normalized-error formula but against `ForwardModel`'s *adaptive*
+  prediction, so it spikes on the same step-change and then decays as the
+  multiplier re-learns the new regime. (Note: `sensors.py`'s `SensorArray`
+  docstring still describes `surprise_volatility` as a proxy "until Phase 3
+  gives us a real prediction-error signal" -- that sentence is now stale
+  now that this phase exists; left as-is since `sensors.py` is out of this
+  phase's file list, per its own scope ruling.)
+
+Gate test: `tests/test_gates/test_phase3.py` -- a synthetic 35-tick daemon
+run (same DI pattern as Phase 1/2's) with a deliberate two-phase step
+function: 15 baseline ticks at nominal `dt_real`, then 20 ticks at a
+sustained 3x `dt_real` standing in for `PlanBuildTEIC.md`'s "silently
+inflate a tool's latency 3x," per this phase's scope ruling above. Because
+`tempo_hz` is still live-driven by Phase 2's arousal feedback loop (not
+held fixed for this test), the absolute `prediction_error` values are not
+literally near-zero throughout baseline -- the assertions are therefore
+ratio-based against this run's own values rather than hand-derived
+absolute numbers: the first injected tick's `prediction_error` is at least
+3x the recent baseline mean, and the end-of-run mean is at least 10x
+smaller than that spike even though `dt_real` never returns to baseline --
+proving re-adaptation to a new regime, not mere recovery from a blip. For
+contrast, `latency_strain` is asserted to stay elevated across the entire
+injected window without that spike-then-decay shape.
