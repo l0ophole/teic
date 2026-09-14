@@ -65,6 +65,14 @@ def test_bar_clamps_below_zero():
     assert t.plain == "░" * 10
 
 
+def test_bar_boundary_070_yellow():
+    assert bd.bar(0.70).style == "yellow"
+
+
+def test_bar_boundary_090_red():
+    assert bd.bar(0.90).style == "red"
+
+
 # ---------------------------------------------------------------- loaders
 
 def test_load_state_missing(tmp_path: Path):
@@ -103,7 +111,7 @@ def test_load_current_fresh(tmp_path: Path):
     assert bd.load_current(p)["label"] == "cp1"
 
 
-def test_load_current_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_load_current_stale(tmp_path: Path):
     p = tmp_path / "current.json"
     p.write_text(json.dumps(
         {"label": "cp1", "started_at": time.time() - bd.DEFAULT_TIMEOUT_S - 5}))
@@ -130,6 +138,25 @@ def test_load_history_tail_and_bad_lines(tmp_path: Path):
     assert [r["ts"] for r in recs] == list(range(5, 15))
 
 
+# ---------------------------------------------------------------- _to_epoch
+
+def test_to_epoch_iso_string():
+    iso = "2026-09-14T12:00:00+00:00"
+    from datetime import datetime, timezone
+    expected = datetime(2026, 9, 14, 12, 0, 0,
+                        tzinfo=timezone.utc).timestamp()
+    assert bd._to_epoch(iso) == expected
+
+
+def test_to_epoch_epoch_float():
+    assert bd._to_epoch(1789468800.0) == 1789468800.0
+
+
+def test_to_epoch_none_and_garbage():
+    assert bd._to_epoch(None) is None
+    assert bd._to_epoch("not a date") is None
+
+
 # ---------------------------------------------------------------- phase_totals
 
 def test_phase_totals_sums_and_skips_none_phase():
@@ -154,5 +181,17 @@ def test_render_frame_never_crashes_on_missing_files():
         usage_path=Path("/nonexistent/usage.json"),
         history_path=Path("/nonexistent/hist.jsonl"),
         current_path=Path("/nonexistent/current.json"),
+    )
+    assert frame is not None
+
+
+def test_render_frame_survives_corrupt_state_file(tmp_path: Path):
+    state = tmp_path / "state.json"
+    state.write_text("not json{")
+    frame = bd.render_frame(
+        state_path=state,
+        usage_path=tmp_path / "usage.json",
+        history_path=tmp_path / "hist.jsonl",
+        current_path=tmp_path / "current.json",
     )
     assert frame is not None

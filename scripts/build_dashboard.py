@@ -11,7 +11,7 @@ import argparse
 import json
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -23,8 +23,7 @@ except ImportError:
     sys.exit("run with .venv/bin/python scripts/build_dashboard.py")
 
 from orchestrate_build import (CURRENT_FILE, DEFAULT_TIMEOUT_S, HISTORY_FILE,
-                              STATE_FILE, USAGE_FILE, parse_checkpoints,
-                              PLAN_DIR)
+                               STATE_FILE, USAGE_FILE, parse_checkpoints)
 
 WINDOW_ORDER = ["five_hour", "seven_day"]
 
@@ -72,11 +71,17 @@ def load_json(path: Path):
 
 
 def load_state(path: Path):
-    return load_json(path)
+    data = load_json(path)
+    if not isinstance(data, dict):
+        return None
+    return data
 
 
 def load_usage(path: Path):
-    return load_json(path)
+    data = load_json(path)
+    if not isinstance(data, dict):
+        return None
+    return data
 
 
 def load_current(path: Path):
@@ -102,9 +107,12 @@ def load_history(path: Path, tail: int = 10) -> list[dict]:
         if not line:
             continue
         try:
-            records.append(json.loads(line))
+            parsed = json.loads(line)
         except json.JSONDecodeError:
             continue  # partial write; skip silently
+        if not isinstance(parsed, dict):
+            continue
+        records.append(parsed)
     return records[-tail:]
 
 
@@ -163,9 +171,10 @@ def _progress(state) -> Table:
             try:
                 cps = parse_checkpoints(plan)
                 cps_total = len(cps)
-                cps_done = sum(
-                    1 for cp in cps
-                    if (state.get("checkpoints_done") or {}).get(cp))
+                done = state.get("checkpoints_done") or []
+                if not isinstance(done, list):
+                    done = []
+                cps_done = sum(1 for cp in cps if cp in done)
             except Exception:
                 pass
     if cps_total is not None:
@@ -175,11 +184,11 @@ def _progress(state) -> Table:
     return t
 
 
-def _running(now: float) -> Table:
+def _running(now: float, current_path: Path = CURRENT_FILE) -> Table:
     t = Table(title="Running", box=None, show_header=False, padding=(0, 1))
     t.add_column(style="bold")
     t.add_column()
-    current = load_current(CURRENT_FILE)
+    current = load_current(current_path)
     if current:
         elapsed = now - (_to_epoch(current.get("started_at")) or now)
         t.add_row(current.get("label", "?"), f"{fmt_countdown(elapsed)} elapsed")
@@ -214,8 +223,8 @@ def _segments(history) -> Table:
                   f"{rec.get('billed_tokens') or 0:,}",
                   f"{rec.get('cache_read_tokens') or 0:,}",
                   dur_s, outcome)
-    for phase in sorted(phase_totals(history)):
-        pt = phase_totals(history)[phase]
+    totals = phase_totals(history)
+    for phase, pt in sorted(totals.items()):
         t.add_row(_dim("Σ"), _dim(f"phase {phase}"),
                   _dim(str(pt["turns"])),
                   _dim(f"{pt['billed']:,}"),
@@ -245,13 +254,14 @@ def _quota(usage, now: float) -> Table:
         if not isinstance(w, dict):
             continue
         util = w.get("utilization")
-        if util is None:
+        if util is None or not isinstance(util, (int, float)):
             t.add_row(name, _dim("unknown"))
             continue
         bar_w = bar(util)
         suffix = ""
         if updated is not None:
-            suffix = f"  updated {fmt_countdown(now - updated).lstrip('<')} ago"
+            age = max(0.0, now - updated)
+            suffix = f"  updated {fmt_countdown(age).lstrip('<')} ago"
         t.add_row(name, bar_w, Text(f"{util:.0%}{suffix}"))
     return t
 
@@ -287,7 +297,7 @@ def render_frame(state_path: Path = STATE_FILE, usage_path: Path = USAGE_FILE,
     return Group(
         _header(state, now),
         _progress(state),
-        _running(now),
+        _running(now, current_path),
         _segments(history),
         _quota(usage, now),
         _resets(usage, now),
