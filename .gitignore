@@ -8,6 +8,10 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .env
+build-state.json
+usage.json
+current.json
+build-history.jsonl
 data/*.db
 data/*.db-wal
 data/*.db-shm
