@@ -9,6 +9,15 @@ Phase 1: `register_sample` rows now carry real sensed/inferred values via
 `ChannelPipeline` (see `teic/interoception/channels.py`). `affect_sample`
 stays a neutral placeholder -- affect dynamics/mood are Layer 2 work that
 lands with the non-linguistic modulation gate in Phase 2, not this phase.
+
+Phase 2: `affect_sample` now carries a real `AffectState` computed each tick
+by `AffectDynamics`/`MoodTracker` from that tick's `RegisterState`, and
+`ModulationCompute.compute()` turns `(registers, affect, mood)` into real
+`ModulationParams` -- including `tempo_hz`, which is fed back into the
+`Heartbeat` for the *next* tick's interval via `tempo_hz_provider`. This is
+the concrete non-linguistic behavior-change pathway: no LLM call happens
+here yet (that's still later phases), but the tick cadence itself now moves
+with arousal, with zero textual access to state.
 """
 
 from __future__ import annotations
@@ -19,7 +28,11 @@ from datetime import UTC, datetime
 
 import aiosqlite
 
+from teic.interoception.affect_dynamics import AffectDynamics
 from teic.interoception.channels import ChannelPipeline
+from teic.interoception.modulation import ModulationCompute
+from teic.interoception.mood import MoodTracker
+from teic.models.affect import AffectState
 from teic.models.registers import REGISTER_CHANNELS
 from teic.models.tick import TickContext
 from teic.persistence.db import open_db
@@ -36,6 +49,10 @@ class TeicDaemon:
         self._session_id: str = str(uuid.uuid4())
         self._heartbeat: Heartbeat | None = None
         self._channels: ChannelPipeline | None = None
+        self._affect_dynamics: AffectDynamics | None = None
+        self._mood: MoodTracker | None = None
+        self._modulation: ModulationCompute | None = None
+        self._current_tempo_hz: float = 0.0
 
     @property
     def session_id(self) -> str:
@@ -55,11 +72,19 @@ class TeicDaemon:
             (self._session_id, datetime.now(UTC).isoformat(), json.dumps(config_snapshot)),
         )
         await self._conn.commit()
+        self._current_tempo_hz = self._settings.daemon.base_tempo_hz
         self._heartbeat = Heartbeat(
-            tempo_hz=self._settings.daemon.base_tempo_hz,
+            tempo_hz=self._current_tempo_hz,
             on_tick=self._on_tick,
+            tempo_hz_provider=lambda: self._current_tempo_hz,
         )
         self._channels = ChannelPipeline()
+        self._affect_dynamics = AffectDynamics()
+        self._mood = MoodTracker()
+        self._modulation = ModulationCompute(
+            idle_tempo_hz=self._settings.daemon.idle_tempo_hz,
+            max_tempo_hz=self._settings.daemon.max_tempo_hz,
+        )
 
     async def stop(self) -> None:
         if self._heartbeat is not None:
@@ -84,8 +109,14 @@ class TeicDaemon:
     async def _on_tick(self, tick_index: int, dt_real: float) -> None:
         assert self._conn is not None
         assert self._channels is not None
+        assert self._affect_dynamics is not None
+        assert self._mood is not None
+        assert self._modulation is not None
         now = datetime.now(UTC)
-        tempo_hz = self._settings.daemon.base_tempo_hz
+        # The cadence actually in effect for THIS tick -- Phase 2's
+        # feedback loop only updates `self._current_tempo_hz` at the end of
+        # this method, for the tick after this one.
+        tempo_hz = self._current_tempo_hz
         cursor = await self._conn.execute(
             "INSERT INTO tick (session_id, tick_index, wall_ts, dt_real, dt_subjective, tempo_hz) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -128,9 +159,31 @@ class TeicDaemon:
                     now.isoformat(),
                 ),
             )
+        # Phase 2: real affect + modulation, replacing Phase 1's neutral
+        # placeholder. Mood is a slow integrator over valence (mood.py);
+        # AffectDynamics smooths raw per-tick valence/arousal signals
+        # derived from the register vector -- never hand-labeled.
+        valence, arousal = self._affect_dynamics.update(register_state)
+        mood = self._mood.update(valence)
+        affect_state = AffectState(
+            valence=valence, arousal=arousal, mood=mood, tick_id=tick_id, ts=now
+        )
+        modulation_params = self._modulation.compute(register_state, affect_state, mood)
         await self._conn.execute(
             "INSERT INTO affect_sample (tick_id, valence, arousal, mood, attractor_label, ts) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (tick_id, 0.0, 0.0, 0.0, "neutral", now.isoformat()),
+            (
+                tick_id,
+                affect_state.valence,
+                affect_state.arousal,
+                affect_state.mood,
+                affect_state.nearest_attractor_label(),
+                now.isoformat(),
+            ),
         )
         await self._conn.commit()
+
+        # Feed this tick's computed tempo forward: the heartbeat's
+        # `tempo_hz_provider` reads `self._current_tempo_hz` after this
+        # callback returns, so the NEXT tick's sleep interval reflects it.
+        self._current_tempo_hz = modulation_params.tempo_hz

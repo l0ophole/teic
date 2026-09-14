@@ -126,3 +126,93 @@ and that `latency_strain`'s `inferred_value`/`inferred_var` actually move
 across ticks rather than staying pinned at Phase 0's flat `0.0`. Per this
 phase's gate wording, no assertion is made about LLM calls, prompt
 content, or generated text.
+
+### Phase 2 — Non-linguistic modulation (complete)
+
+**Phase 2 is the spec's explicitly-named "real gate"**: the master spec
+(`docs/PlanBuildTEIC.md`) states that if behavior cannot be made to change
+through a non-linguistic channel, the build stops and reports to the user
+before continuing. This phase makes that behavior change concrete: the
+heartbeat's tick cadence and the LLM sampling parameters (`temperature`,
+`top_p`) now move with the interoceptive/affective state, with zero
+textual access to that state -- `llm/prompt_assembly.py`'s type signature
+(no `RegisterState`/`AffectState` parameter) is unchanged from Phase 0.
+
+- `teic/interoception/affect_dynamics.py`: `AffectDynamics` computes two raw
+  signals fresh each tick from `RegisterState` -- `_raw_valence` (a viability
+  trend: budget headroom minus burn, pulled down by unresolved
+  `epistemic_tension`/`prediction_error`) and `_raw_arousal` (a
+  resource-mobilization magnitude: a weighted sum of `prediction_error`,
+  `surprise_volatility`, `latency_strain`, `context_pressure`) -- then
+  smooths each with the same fixed-gain-EWMA convention `inference.py`
+  established in Phase 1 (`ALPHA = 0.3`). Never a hand-authored label:
+  `AffectState.nearest_attractor_label()` (Phase 0) remains the only place a
+  string label is ever computed, and only post hoc for display.
+- `teic/interoception/mood.py`: `MoodTracker` is a single-state EWMA over
+  the valence stream, but at `MOOD_ALPHA = 0.05` -- deliberately much
+  smaller than `AffectDynamics.ALPHA` so mood is a genuinely slower
+  integrator, not just a second copy of the same signal under a different
+  name. `tests/test_interoception/test_mood.py` asserts this quantitatively
+  (mood moves less than a same-gain-as-affect EWMA would over the same N
+  updates), not just qualitatively.
+- `teic/interoception/reportability.py`: `ReportabilityGate.evaluate()`
+  produces `speak_gate_open` from a cooldown-gated threshold on
+  `epistemic_tension` alone (`SPEAK_GATE_EPISTEMIC_THRESHOLD = 0.3`,
+  `REFRACTORY_TICKS = 5`). **Scope decision, recorded explicitly so it isn't
+  mistaken for Phase 7's gate**: `docs/PlanBuildTEIC.md`'s own phase table
+  lists a full "reportability gate" under Phase 7 (self-model,
+  metacognition, confidence calibration), but `PLAN.md`'s Build Order table
+  names `reportability.py` in Phase 2 because `ModulationCompute` needs a
+  real `speak_gate_open` now. This module is that narrow slice only --
+  workspace ignition (Phase 5) and self-model confidence (Phase 7) compose
+  with it later; they are not folded in here.
+- `teic/interoception/modulation.py`: `ModulationCompute.compute()` replaces
+  Phase 0's `NotImplementedError` stub with the concrete wiring
+  `PLAN.md`'s "Non-Linguistic Modulation Pathway" section describes:
+  `tempo_hz` from arousal (idle-to-max range), `temperature`/`top_p` from
+  `epistemic_tension` and negative mood, `retrieval_k`/
+  `retrieval_affect_weight` from `context_pressure`/`memory_fragmentation`/
+  valence, `planning_depth` from budget strain and `goal_gradient`,
+  `tool_risk_tolerance` from `effector_integrity` and valence,
+  `salience_weight_overrides` from `latency_strain` (the single example
+  named in `PLAN.md`'s own text), and `speak_gate_open` from
+  `reportability.py`. **Fields with no consumer yet, named explicitly so
+  they aren't mistaken for dead code**: `retrieval_k`/
+  `retrieval_affect_weight` (Phase 4's retrieval), `planning_depth`
+  (Phase 5/6), `tool_risk_tolerance` (whenever an effector exists),
+  `salience_weight_overrides` (Phase 5's arbiter) -- all are computed from
+  real inputs now, deliberately not stubbed with fixed values, so the whole
+  struct is real ahead of its consumers landing.
+- `teic/temporal/heartbeat.py`: a new optional `tempo_hz_provider` hook is
+  consulted once after each tick; when set, its return value becomes the
+  tempo used for the *next* interval. Left `None` by default, so Phase 0/1's
+  fixed-tempo gate tests (which construct `Heartbeat` without it) are
+  unaffected -- verified directly in the new
+  `tests/test_temporal/test_heartbeat.py`.
+- `teic/daemon.py`: `_on_tick` now computes a real `AffectState` per tick
+  (`AffectDynamics.update()` -> `MoodTracker.update()`) and calls
+  `ModulationCompute.compute()`, writing the result into `affect_sample`
+  (replacing Phase 1's neutral placeholder) and feeding
+  `ModulationParams.tempo_hz` into `self._current_tempo_hz`, which the
+  heartbeat's `tempo_hz_provider` reads for the following tick. The
+  `tick.tempo_hz` column and `TickContext.tempo_hz` both now read the
+  cadence actually in effect for the current tick rather than a hard read
+  of `settings.daemon.base_tempo_hz`.
+- **Scope decision, stated explicitly so it isn't mistaken for a gap**: no
+  real LLM call happens in this phase. There is still no workspace arbiter
+  (Phase 5) to produce an actual `WorkspaceBroadcast` from live cognition,
+  so `assemble_prompt()` is only exercised in tests with a synthetic
+  broadcast. This phase proves the modulation *pathway* end-to-end
+  (registers -> affect/mood -> `ModulationParams` -> heartbeat tempo +
+  sampling params), not an end-to-end chat turn.
+
+Gate test: `tests/test_gates/test_phase2.py` -- a synthetic 40-tick daemon
+run (same DI pattern as Phase 1's, with a wider jitter swing so arousal
+moves meaningfully) asserts `tick.tempo_hz` now takes more than one distinct
+value across the session (Phase 0/1 always wrote a fixed tempo) and
+`affect_sample.valence` is no longer pinned at Phase 1's flat `0.0`. It then
+pulls an early- and a late-tick register/affect snapshot from that same run
+and re-verifies the literal gate wording against them: byte-identical
+`assemble_prompt` output text for a shared broadcast/narrative_tail, with
+divergent `temperature`/`tempo_hz`/`speak_gate_open`. Per this phase's gate
+wording, no assertion is made about real LLM calls or generated text.

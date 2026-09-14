@@ -1,6 +1,11 @@
 """The tick loop -- Layer 0's variable-tempo heartbeat.
 
-Phase 0: fixed tempo only (no arousal-driven modulation yet; that's Phase 2).
+Phase 0: fixed tempo only. Phase 2 adds an optional `tempo_hz_provider`
+hook: after each tick, if set, it is consulted and its return value becomes
+the tempo used for the *next* interval -- this is the "fed straight into the
+heartbeat's next sleep interval" wiring PLAN.md's modulation section
+describes. Left `None` by default so Phase 0/1's fixed-tempo gate tests,
+which construct `Heartbeat` without it, are unaffected.
 `time_source` and `sleep_fn` are dependency-injected rather than calling
 `time.monotonic()`/`asyncio.sleep()` directly, so tests can fake elapsed
 wall-clock time without waiting on it (see PLAN.md risk #2, empty-clock test).
@@ -15,6 +20,7 @@ from collections.abc import Awaitable, Callable
 TickCallback = Callable[[int, float], Awaitable[None]]
 TimeSource = Callable[[], float]
 SleepFn = Callable[[float], Awaitable[None]]
+TempoHzProvider = Callable[[], float]
 
 
 class Heartbeat:
@@ -24,11 +30,13 @@ class Heartbeat:
         on_tick: TickCallback,
         time_source: TimeSource = time.monotonic,
         sleep_fn: SleepFn = asyncio.sleep,
+        tempo_hz_provider: TempoHzProvider | None = None,
     ) -> None:
         self._tempo_hz = tempo_hz
         self._on_tick = on_tick
         self._time_source = time_source
         self._sleep_fn = sleep_fn
+        self._tempo_hz_provider = tempo_hz_provider
         self._tick_index = 0
         self._stop_event = asyncio.Event()
 
@@ -51,6 +59,8 @@ class Heartbeat:
             last_ts = now
             await self._on_tick(self._tick_index, dt_real)
             self._tick_index += 1
+            if self._tempo_hz_provider is not None:
+                self._tempo_hz = self._tempo_hz_provider()
 
     async def run_n_ticks(self, n: int) -> None:
         """Test/dev convenience: run exactly n ticks then return."""
@@ -63,3 +73,5 @@ class Heartbeat:
             last_ts = now
             await self._on_tick(self._tick_index, dt_real)
             self._tick_index += 1
+            if self._tempo_hz_provider is not None:
+                self._tempo_hz = self._tempo_hz_provider()
