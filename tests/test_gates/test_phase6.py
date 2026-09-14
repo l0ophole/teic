@@ -10,10 +10,15 @@ only after. The termination gate itself is cp2 scope, not tested here.
 
 from __future__ import annotations
 
+import pytest
+
+from teic.daemon import TeicDaemon
 from teic.embodiment.viability_budget import ViabilityBudget
+from teic.ethics.termination_gate import TerminationGate, TerminationRefused
 from teic.interoception.allostasis import AllostaticForecaster
 from teic.interoception.inference import ChannelInference
-from teic.settings import ViabilitySettings
+from teic.persistence.log_sink import LogSink
+from teic.settings import Settings, ViabilitySettings
 
 
 def test_budget_actually_depletes_under_synthetic_spend() -> None:
@@ -70,3 +75,52 @@ def test_allostatic_forecast_raises_pressure_before_actual_violation() -> None:
 
     pressure = forecaster.anticipatory_pressure("budget_reserve", threshold=threshold)
     assert pressure > 0.0  # but the forecaster already sees the crossing coming
+
+
+@pytest.mark.asyncio
+async def test_termination_gate_refuses_when_unconfigured(tmp_settings: Settings) -> None:
+    """`allow_actual_termination` defaults False -- fire() must refuse and
+    must not write any log_event row."""
+    daemon = TeicDaemon(tmp_settings)
+    await daemon.start()
+    log_sink = LogSink(daemon.conn)
+    gate = TerminationGate(tmp_settings.viability, log_sink)
+
+    with pytest.raises(TerminationRefused):
+        await gate.fire(daemon.session_id, tick_id=0, reason="reserve depleted")
+
+    cursor = await daemon.conn.execute(
+        "SELECT COUNT(*) FROM log_event WHERE event_type = 'termination_fired'"
+    )
+    (count,) = await cursor.fetchone()  # type: ignore[misc]
+    assert count == 0
+
+    await daemon.stop()
+
+
+@pytest.mark.asyncio
+async def test_termination_gate_fires_and_logs_when_configured(tmp_settings: Settings) -> None:
+    """With both `allow_actual_termination` and `termination_justification`
+    set, fire() must succeed and write a permanent log_event row before the
+    caller halts the daemon."""
+    tmp_settings.viability.allow_actual_termination = True
+    tmp_settings.viability.termination_justification = "test: reserve permanently exhausted"
+    daemon = TeicDaemon(tmp_settings)
+    await daemon.start()
+    await daemon.run_n_ticks(1)
+    log_sink = LogSink(daemon.conn)
+    gate = TerminationGate(tmp_settings.viability, log_sink)
+
+    await gate.fire(daemon.session_id, tick_id=1, reason="reserve depleted")
+
+    cursor = await daemon.conn.execute(
+        "SELECT session_id, event_type, payload FROM log_event WHERE event_type = 'termination_fired'"
+    )
+    row = await cursor.fetchone()
+    assert row is not None
+    session_id, event_type, payload = row
+    assert session_id == daemon.session_id
+    assert event_type == "termination_fired"
+    assert "test: reserve permanently exhausted" in payload
+
+    await daemon.stop()
