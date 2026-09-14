@@ -50,6 +50,7 @@ ALLOW_SETTINGS = {
             "Bash(source .venv/bin/activate*)",
             "Bash(.venv/bin/pytest*)",
             "Bash(.venv/bin/mypy*)",
+            "Bash(.venv/bin/python*)",
             "Bash(pytest*)",
             "Bash(mypy*)",
             "Bash(git add*)",
@@ -313,8 +314,15 @@ def run_segment(prompt: str, *, model: str, max_turns: int,
             # Guard: permission denials -> allowlist too narrow
             if res.permission_denials:
                 tools = sorted({d.get("tool_name", "?") for d in res.permission_denials})
-                raise Halt(f"[{label}] permission denials for {tools} — allowlist needs "
-                           f"these rules; halting to avoid silently skipped work "
+                details = []
+                for d in res.permission_denials[:3]:
+                    inp = d.get("input") or d.get("tool_input") or {}
+                    cmd = inp.get("command", "") if isinstance(inp, dict) else ""
+                    details.append(f"  {d.get('tool_name', '?')}: "
+                                   f"{(cmd[:160] + '...') if len(cmd) > 160 else cmd}")
+                raise Halt(f"[{label}] permission denials for {tools} — allowlist "
+                           f"needs rules for:\n" + "\n".join(details) +
+                           f"\nhalting to avoid silently skipped work "
                            f"(transcript: {transcript_path(res.session_id)})")
             # Guard: rate limit blocked
             if res.is_error and ("usage limit" in res.result_text.lower()
