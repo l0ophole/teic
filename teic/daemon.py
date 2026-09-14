@@ -18,6 +18,20 @@ by `AffectDynamics`/`MoodTracker` from that tick's `RegisterState`, and
 the concrete non-linguistic behavior-change pathway: no LLM call happens
 here yet (that's still later phases), but the tick cadence itself now moves
 with arousal, with zero textual access to state.
+
+Phase 3: `prediction_error` now flows from a real `ForwardModel`/
+`ProtentionBuffer` pair instead of the flat `0.0` placeholder Phases 0-2
+wrote. Each tick, before its own sensing, `_on_tick` pops the prediction
+made at the end of the *previous* tick (if any) and resolves it against
+what actually happened (this tick's `dt_real`) via `ForwardModel.observe()`,
+producing the `prediction_error` fed into this tick's `ChannelPipeline`.
+Then, after this tick's own processing, it predicts the *next* tick's
+`dt_real` via `ForwardModel.predict_dt_real()` and pushes a new
+`ProtentionEntry` (carrying that prediction plus a naive one-step
+carry-forward of this tick's register vector) for the next tick to resolve.
+This still isn't a real effector-latency forward model -- tick timing
+stands in for it, since no LLM/tool call exists yet to have latency of its
+own -- that's Phase 5+.
 """
 
 from __future__ import annotations
@@ -28,6 +42,7 @@ from datetime import UTC, datetime
 
 import aiosqlite
 
+from teic.embodiment.forward_model import ForwardModel
 from teic.interoception.affect_dynamics import AffectDynamics
 from teic.interoception.channels import ChannelPipeline
 from teic.interoception.modulation import ModulationCompute
@@ -39,6 +54,7 @@ from teic.persistence.db import open_db
 from teic.persistence.log_sink import LogSink
 from teic.settings import Settings
 from teic.temporal.heartbeat import Heartbeat
+from teic.temporal.protention import ProtentionBuffer, ProtentionEntry
 
 
 class TeicDaemon:
@@ -52,6 +68,8 @@ class TeicDaemon:
         self._affect_dynamics: AffectDynamics | None = None
         self._mood: MoodTracker | None = None
         self._modulation: ModulationCompute | None = None
+        self._forward_model: ForwardModel | None = None
+        self._protention: ProtentionBuffer | None = None
         self._current_tempo_hz: float = 0.0
 
     @property
@@ -85,6 +103,8 @@ class TeicDaemon:
             idle_tempo_hz=self._settings.daemon.idle_tempo_hz,
             max_tempo_hz=self._settings.daemon.max_tempo_hz,
         )
+        self._forward_model = ForwardModel()
+        self._protention = ProtentionBuffer()
 
     async def stop(self) -> None:
         if self._heartbeat is not None:
@@ -112,11 +132,22 @@ class TeicDaemon:
         assert self._affect_dynamics is not None
         assert self._mood is not None
         assert self._modulation is not None
+        assert self._forward_model is not None
+        assert self._protention is not None
         now = datetime.now(UTC)
-        # The cadence actually in effect for THIS tick -- Phase 2's
-        # feedback loop only updates `self._current_tempo_hz` at the end of
-        # this method, for the tick after this one.
         tempo_hz = self._current_tempo_hz
+
+        # Phase 3: resolve last tick's prediction (if any) against what
+        # actually happened this tick, before this tick's own sensing.
+        pending = self._protention.pop()
+        if pending is not None:
+            nominal_dt = 1.0 / tempo_hz
+            prediction_error = self._forward_model.observe(
+                dt_real, nominal_dt, pending.predicted_dt_real
+            )
+        else:
+            prediction_error = 0.0
+
         cursor = await self._conn.execute(
             "INSERT INTO tick (session_id, tick_index, wall_ts, dt_real, dt_subjective, tempo_hz) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -125,8 +156,6 @@ class TeicDaemon:
         tick_id = cursor.lastrowid
         assert tick_id is not None
 
-        # Phase 1: real sensing + inference. No input task exists yet, so
-        # idle_state/pending_input_count stay at their neutral defaults.
         tick_ctx = TickContext(
             session_id=self._session_id,
             tick_index=tick_index,
@@ -137,13 +166,11 @@ class TeicDaemon:
             idle_state=False,
             pending_input_count=0,
         )
-        register_state = self._channels.process(tick_ctx, tick_id, now)
+        register_state = self._channels.process(
+            tick_ctx, tick_id, now, prediction_error=prediction_error
+        )
         raw = self._channels.last_raw
         assert raw is not None
-        # `.model_dump()`/`as_dict()` once, rather than per-channel
-        # `getattr(obj, channel)` with a dynamic string name: the latter
-        # types as `Any` under mypy --strict, silently defeating the
-        # `dict[str, float]` contract these values flow through.
         raw_values: dict[str, float] = raw.model_dump()
         register_values: dict[str, float] = register_state.as_dict()
         for channel in REGISTER_CHANNELS:
@@ -159,10 +186,6 @@ class TeicDaemon:
                     now.isoformat(),
                 ),
             )
-        # Phase 2: real affect + modulation, replacing Phase 1's neutral
-        # placeholder. Mood is a slow integrator over valence (mood.py);
-        # AffectDynamics smooths raw per-tick valence/arousal signals
-        # derived from the register vector -- never hand-labeled.
         valence, arousal = self._affect_dynamics.update(register_state)
         mood = self._mood.update(valence)
         affect_state = AffectState(
@@ -183,7 +206,17 @@ class TeicDaemon:
         )
         await self._conn.commit()
 
-        # Feed this tick's computed tempo forward: the heartbeat's
-        # `tempo_hz_provider` reads `self._current_tempo_hz` after this
-        # callback returns, so the NEXT tick's sleep interval reflects it.
+        # Phase 3: predict the *next* tick's dt_real (using the tempo
+        # that will actually be in effect for it) and interoceptive
+        # vector, for next tick's _on_tick to resolve.
+        next_nominal_dt = 1.0 / modulation_params.tempo_hz
+        predicted_dt_real = self._forward_model.predict_dt_real(next_nominal_dt)
+        self._protention.push(
+            ProtentionEntry(
+                made_at_tick_id=tick_id,
+                predicted_at=now,
+                predicted_dt_real=predicted_dt_real,
+                predicted_registers=register_state.as_dict(),
+            )
+        )
         self._current_tempo_hz = modulation_params.tempo_hz

@@ -31,7 +31,13 @@ class ChannelPipeline:
         self.inference = ChannelInference()
         self.last_raw: RawSensorSample | None = None
 
-    def process(self, tick_ctx: TickContext, tick_id: int, ts: datetime) -> RegisterState:
-        raw = self.sensors.sample(tick_ctx)
+    def process(
+        self,
+        tick_ctx: TickContext,
+        tick_id: int,
+        ts: datetime,
+        prediction_error: float = 0.0,
+    ) -> RegisterState:
+        raw = self.sensors.sample(tick_ctx, prediction_error)
         self.last_raw = raw
         return self.inference.infer(raw, tick_id, ts)
