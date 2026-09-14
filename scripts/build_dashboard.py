@@ -101,7 +101,7 @@ def load_current(path: Path):
     return data
 
 
-def load_history(path: Path, tail: int = 10) -> list[dict]:
+def load_history(path: Path, tail: int | None = 10) -> list[dict]:
     try:
         lines = path.read_text().splitlines()
     except OSError:
@@ -118,7 +118,7 @@ def load_history(path: Path, tail: int = 10) -> list[dict]:
         if not isinstance(parsed, dict):
             continue
         records.append(parsed)
-    return records[-tail:]
+    return records[-tail:] if tail is not None else records
 
 
 def phase_totals(history: list[dict]) -> dict[int, dict]:
@@ -202,7 +202,7 @@ def _running(now: float, current_path: Path = CURRENT_FILE) -> Table:
     return t
 
 
-def _segments(history) -> Table:
+def _segments(history, totals: dict[int, dict] | None = None) -> Table:
     t = Table(title="Segments", box=None, padding=(0, 1))
     t.add_column("time")
     t.add_column("label")
@@ -228,13 +228,13 @@ def _segments(history) -> Table:
                   f"{rec.get('billed_tokens') or 0:,}",
                   f"{rec.get('cache_read_tokens') or 0:,}",
                   dur_s, outcome)
-    totals = phase_totals(history)
+    totals = totals if totals is not None else phase_totals(history)
     for phase, pt in sorted(totals.items()):
         t.add_row(_dim("Σ"), _dim(f"phase {phase}"),
                   _dim(str(pt["turns"])),
                   _dim(f"{pt['billed']:,}"),
-                  _dim(f"{pt['segments']} seg"),
-                  "", "")
+                  _dim(""),
+                  _dim(f"{pt['segments']} seg"), _dim(""))
     return t
 
 
@@ -298,12 +298,12 @@ def render_frame(state_path: Path = STATE_FILE, usage_path: Path = USAGE_FILE,
     now = time.time()
     state = load_state(state_path)
     usage = load_usage(usage_path)
-    history = load_history(history_path)
+    full_history = load_history(history_path, tail=None)
     return Group(
         _header(state, now),
         _progress(state),
         _running(now, current_path),
-        _segments(history),
+        _segments(full_history[-10:], phase_totals(full_history)),
         _quota(usage, now),
         _resets(usage, now),
     )
@@ -332,6 +332,8 @@ def run_live(console: Console) -> None:
                     if char == "" or wants_quit(char):
                         break
                 live.update(render_frame())
+    except KeyboardInterrupt:
+        pass
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 

@@ -138,6 +138,30 @@ def test_load_history_tail_and_bad_lines(tmp_path: Path):
     assert [r["ts"] for r in recs] == list(range(5, 15))
 
 
+def test_load_history_tail_none_returns_all(tmp_path: Path):
+    p = tmp_path / "hist.jsonl"
+    lines = [json.dumps({"ts": i, "label": f"s{i}", "phase": 1,
+                         "billed_tokens": 10, "turns": 1,
+                         "outcome": "ok"})
+             for i in range(15)]
+    p.write_text("\n".join(lines) + "\n")
+    assert len(bd.load_history(p, tail=None)) == 15
+
+
+def test_segments_totals_cover_full_history(tmp_path: Path):
+    p = tmp_path / "hist.jsonl"
+    lines = [json.dumps({"ts": i, "label": f"s{i}", "phase": 6,
+                         "billed_tokens": 10, "turns": 2,
+                         "outcome": "ok"})
+             for i in range(12)]
+    p.write_text("\n".join(lines) + "\n")
+    full = bd.load_history(p, tail=None)
+    seg = bd._segments(full[-10:], bd.phase_totals(full))
+    assert len(seg.rows) == 11  # 10 display rows + 1 Σ row
+    total_turns = bd.phase_totals(full)[6]["turns"]
+    assert total_turns == 24  # Σ counts all 12 records, not just the tail
+
+
 # ---------------------------------------------------------------- _to_epoch
 
 def test_to_epoch_iso_string():
