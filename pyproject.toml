@@ -38,3 +38,7 @@ testpaths = ["tests"]
 python_version = "3.12"
 strict = true
 files = ["teic/models", "teic/interoception", "teic/workspace", "teic/llm", "teic/embodiment", "teic/memory", "teic/daemon.py"]
+
+[[tool.mypy.overrides]]
+module = "sqlite_vec"
+ignore_missing_imports = true
