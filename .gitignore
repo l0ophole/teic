@@ -9,6 +9,7 @@ venv/
 .ruff_cache/
 .env
 build-state.json
+*-local-command-caveat*.txt
 usage.json
 current.json
 build-history.jsonl

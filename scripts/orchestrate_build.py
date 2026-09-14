@@ -40,14 +40,16 @@ CURRENT_FILE = PROJECT / "current.json"
 DEFAULT_MODEL = "claude-sonnet-5"
 DEFAULT_MAX_TURNS = 60
 AUTOCOMPACT = 120000
-DEFAULT_TOKEN_CEILING = 1_500_000
+DEFAULT_TOKEN_CEILING = 2_500_000
 DEFAULT_TIMEOUT_S = 3600
 RATE_LIMIT_SLEEP_BUFFER_S = 120
 
 ALLOW_SETTINGS = {
     "permissions": {
         "allow": [
-            "Bash(source .venv/bin/activate *)",
+            "Bash(source .venv/bin/activate*)",
+            "Bash(.venv/bin/pytest*)",
+            "Bash(.venv/bin/mypy*)",
             "Bash(pytest*)",
             "Bash(mypy*)",
             "Bash(git add*)",
