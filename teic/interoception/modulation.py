@@ -5,10 +5,14 @@ on for its type-level enforcement boundary (defined since Phase 0).
 `ModulationCompute.compute()` is now real: every field is derived from
 `RegisterState`/`AffectState`/mood per PLAN.md's "Non-Linguistic Modulation
 Pathway" section. Several fields (`retrieval_k`, `retrieval_affect_weight`,
-`planning_depth`, `tool_risk_tolerance`, `salience_weight_overrides`) have no
-consumer yet -- retrieval/planning/effectors/the workspace arbiter land in
-Phases 4/5/6 -- but they are computed from real inputs now, not stubbed with
-fixed values, so this phase's gate test can exercise the whole struct.
+`planning_depth`, `tool_risk_tolerance`) have no consumer yet --
+planning/effectors land in Phase 5/6 -- but they are computed from real
+inputs now, not stubbed with fixed values, so this phase's gate test can
+exercise the whole struct. `retrieval_k`/`retrieval_affect_weight` gained a
+real consumer in Phase 4 (`memory/retrieval.py`). `salience_weight_overrides`
+gained a real consumer in Phase 5: `compute()`'s new
+`prior_salience_overrides` parameter folds in the previous tick's real
+per-candidate salience from `teic.workspace.arbiter.salience_overrides()`.
 """
 
 from __future__ import annotations
@@ -57,7 +61,11 @@ class ModulationCompute:
         self._reportability = reportability if reportability is not None else ReportabilityGate()
 
     def compute(
-        self, registers: RegisterState, affect: AffectState, mood: float
+        self,
+        registers: RegisterState,
+        affect: AffectState,
+        mood: float,
+        prior_salience_overrides: dict[str, float] | None = None,
     ) -> ModulationParams:
         # tempo_hz <- tempo_gain(arousal) * base_hz: idle at low arousal,
         # up toward max_tempo_hz as arousal rises -- fed straight into the
@@ -108,10 +116,15 @@ class ModulationCompute:
             registers.effector_integrity + affect.valence * 0.2, 0.0, 1.0
         )
 
-        # salience_weight_overrides <- per-source multipliers; named example
-        # from PLAN.md's own text (latency_strain up-weights embodiment
-        # candidates). Unused until Phase 5's arbiter exists.
+        # salience_weight_overrides <- per-source multipliers. "embodiment"
+        # is Phase 2's own named example (latency_strain up-weights
+        # embodiment candidates); Phase 5 folds in last tick's real
+        # per-candidate salience (arbiter.salience_overrides) on top -- this
+        # is the "sub-threshold candidate still modulates" pathway, and it
+        # runs whether or not last tick's winner was ignited.
         salience_weight_overrides = {"embodiment": 1.0 + registers.latency_strain}
+        if prior_salience_overrides is not None:
+            salience_weight_overrides.update(prior_salience_overrides)
 
         # speak_gate_open <- reportability.py's cooldown-gated epistemic
         # threshold. Not yet composed with ignition (Phase 5) or self-model

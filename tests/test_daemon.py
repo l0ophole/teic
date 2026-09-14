@@ -139,4 +139,65 @@ async def test_run_n_ticks_writes_memory_and_returns_promptly(tmp_settings: Sett
     assert row is not None
     assert row[0] == n
 
+    # Phase 5: one workspace_broadcast row per tick too, `ignited` always
+    # 0/1 (never NULL), and mineness_tag always "self" -- see phase5-plan.md
+    # scope ruling 3, no live "other"/"ambiguous" source exists yet.
+    cursor = await conn.execute(
+        "SELECT ignited, mineness_tag FROM workspace_broadcast wb "
+        "JOIN tick t ON wb.tick_id = t.tick_id WHERE t.session_id = ?",
+        (daemon.session_id,),
+    )
+    broadcast_rows = await cursor.fetchall()
+    assert len(broadcast_rows) == n
+    for ignited, mineness_tag in broadcast_rows:
+        assert ignited in (0, 1)
+        assert mineness_tag == "self"
+
     await daemon.stop()
+
+
+@pytest.mark.asyncio
+async def test_high_arousal_run_ignites_more_than_idle_run(tmp_settings: Settings) -> None:
+    """Phase 5 smoke test: a run with injected high epistemic_tension/
+    prediction_error (same coarse injection pattern Phase 3's gate test
+    used) should ignite at least once; a calm/idle baseline run of the same
+    length should ignite never -- a coarse end-to-end signal the arbiter is
+    live, ahead of test_gates/test_phase5.py's precise dissociation gate."""
+    n = 12
+
+    async def _run(jittered: bool) -> int:
+        daemon = TeicDaemon(tmp_settings)
+        await daemon.start()
+        fake_clock = {"t": 0.0}
+        tick_counter = {"n": 0}
+
+        async def fake_sleep(_seconds: float) -> None:
+            nominal_dt = 1.0 / daemon._current_tempo_hz
+            if jittered and tick_counter["n"] % 2 == 0:
+                fake_clock["t"] += nominal_dt * 8.0
+            else:
+                fake_clock["t"] += nominal_dt
+            tick_counter["n"] += 1
+
+        fake_heartbeat = Heartbeat(
+            tempo_hz=tmp_settings.daemon.base_tempo_hz,
+            on_tick=daemon._on_tick,
+            time_source=lambda: fake_clock["t"],
+            sleep_fn=fake_sleep,
+        )
+        await fake_heartbeat.run_n_ticks(n)
+        conn = daemon.conn
+        cursor = await conn.execute(
+            "SELECT SUM(ignited) FROM workspace_broadcast wb "
+            "JOIN tick t ON wb.tick_id = t.tick_id WHERE t.session_id = ?",
+            (daemon.session_id,),
+        )
+        row = await cursor.fetchone()
+        await daemon.stop()
+        assert row is not None
+        return int(row[0] or 0)
+
+    idle_ignitions = await _run(jittered=False)
+    jittered_ignitions = await _run(jittered=True)
+    assert idle_ignitions == 0
+    assert jittered_ignitions > idle_ignitions

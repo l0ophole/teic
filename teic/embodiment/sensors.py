@@ -4,8 +4,11 @@
 early (`latency_strain` from tick timing jitter, `context_pressure` from
 pending input volume) plus a derived volatility signal, and holds every
 other channel at a documented placeholder until the phase that wires it:
-burn_rate/budget_reserve -> 6, epistemic_tension -> 2/7, goal_gradient -> 5,
-memory_fragmentation -> 4, social_contact -> 9, effector_integrity ->
+burn_rate/budget_reserve -> 6, epistemic_tension -> 2/7, goal_gradient ->
+whenever real goal representation exists (self-model/Phase 7+ -- Phase 5's
+workspace arbiter turned out not to need a real goal_gradient value itself,
+see phase5-plan.md scope ruling 5; it uses a fixed baseline instead of this
+channel), memory_fragmentation -> 4, social_contact -> 9, effector_integrity ->
 whenever an LLM call is actually attempted (also 6+). `prediction_error` is
 threaded through from the caller as of Phase 3 (see `teic/daemon.py`'s
 `ForwardModel`/`ProtentionBuffer` wiring) rather than computed here.
@@ -93,7 +96,7 @@ class SensorArray:
             effector_integrity=1.0,  # no LLM call attempted yet
             latency_strain=latency_strain,
             epistemic_tension=0.0,  # wired in Phase 2/7
-            goal_gradient=0.0,  # wired in Phase 5
+            goal_gradient=0.0,  # wired once real goal representation exists (self-model/Phase 7+)
             memory_fragmentation=0.0,  # wired in Phase 4
             social_contact=0.0,  # wired in Phase 9
         )

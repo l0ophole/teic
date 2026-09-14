@@ -19,9 +19,15 @@ from teic.models.affect import AffectState
 from teic.models.workspace import WorkspaceBroadcast, WorkspaceCandidate
 from teic.workspace.mineness import mineness_tag
 
-BASE_IGNITION_THRESHOLD = 0.5
-AROUSAL_GAIN = 0.3
-MOOD_GAIN = 0.1
+# Calibrated empirically (same posture as Phase 3's N_BASELINE tuning):
+# with the real candidate sources daemon.py builds, salience realistically
+# lands in the 0.0 (idle) to ~0.2 (sustained high-arousal jitter) range --
+# see phase5-plan.md scope ruling 4's verification numbers. These constants
+# are chosen so idle runs never ignite (salience stays at exactly 0.0, well
+# under any positive threshold) while sustained real stress reliably does.
+BASE_IGNITION_THRESHOLD = 0.3
+AROUSAL_GAIN = 0.2
+MOOD_GAIN = 0.05
 MIN_IGNITION_THRESHOLD = 0.05
 MAX_IGNITION_THRESHOLD = 1.0
 
@@ -31,8 +37,13 @@ def _clamp(x: float, lo: float, hi: float) -> float:
 
 
 def ignition_threshold(affect: AffectState, mood: float) -> float:
+    # Mirrors modulation.py's `max(0.0, -mood)` idiom for "only negative
+    # mood matters" effects: a bad mood lowers the bar, a good mood doesn't
+    # raise it above the arousal-only baseline.
     return _clamp(
-        BASE_IGNITION_THRESHOLD - affect.arousal * AROUSAL_GAIN - mood * MOOD_GAIN,
+        BASE_IGNITION_THRESHOLD
+        - affect.arousal * AROUSAL_GAIN
+        - max(0.0, -mood) * MOOD_GAIN,
         MIN_IGNITION_THRESHOLD,
         MAX_IGNITION_THRESHOLD,
     )

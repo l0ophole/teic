@@ -47,6 +47,31 @@ also starts a background wall-clock-idle-gated consolidation loop
 real time has passed since the last tick and, if so, structurally merges
 (not LLM-summarizes -- no cognition loop exists yet either) stale
 low-activation memories into a `tau4_consolidated` record.
+
+Phase 5: `_on_tick` now collects this tick's real
+`WorkspaceCandidate`s -- one always from `"interoception"` (this tick's own
+`RegisterState`/`AffectState`, the same data Phase 4 serializes into
+memory) and, when the (now-prior) `memory_record` table isn't empty, one
+from `"memory"` (the top result of a real `MemoryStore.query()` run
+*before* this tick's own memory write, so it can't trivially match
+itself) -- and arbitrates them via `WorkspaceArbiter.select()`, persisting
+one `workspace_broadcast` row per tick regardless of whether the winner
+ignited. Ignition never gates the Phase 4 memory write -- that's real
+interoceptive data, not broadcast content, so it keeps flowing either way.
+Every candidate's salience (not just the winner's, and regardless of
+`ignited`) feeds `arbiter.salience_overrides()` into *next* tick's
+`ModulationCompute.compute(..., prior_salience_overrides=...)` -- the
+"sub-threshold candidate still modulates" pathway this phase's gate tests.
+No real OpenRouter call happens on `ignited=True` yet: `llm/client.py`/
+`llm/prompt_assembly.py` exist and `workspace/broadcast.py`'s
+`render_prompt_if_ignited()` is the real enforcement seam, but actually
+spending budget needs Phase 6's viability accounting to gate it first.
+The interoception candidate's `goal_relevance` uses a fixed baseline
+(`INTEROCEPTION_GOAL_RELEVANCE_BASELINE`), not `RegisterState.goal_gradient`
+-- that channel is a perpetual `0.0` placeholder until real goal
+representation exists (self-model/Phase 7+; see `embodiment/sensors.py`),
+and multiplying salience by an always-zero term would zero it in every
+real run.
 """
 
 from __future__ import annotations
@@ -72,14 +97,28 @@ from teic.memory.store import MemoryStore
 from teic.models.affect import AffectState
 from teic.models.registers import REGISTER_CHANNELS
 from teic.models.tick import TickContext
+from teic.models.workspace import WorkspaceCandidate
 from teic.persistence.db import open_db
 from teic.persistence.log_sink import LogSink
 from teic.settings import Settings
 from teic.temporal.heartbeat import Heartbeat
 from teic.temporal.protention import ProtentionBuffer, ProtentionEntry
+from teic.workspace.arbiter import WorkspaceArbiter, salience_overrides
 
 # How often the background consolidation loop checks wall-clock idle time.
 CONSOLIDATION_POLL_INTERVAL_S = 5.0
+
+# Phase 5 scope ruling 5: `RegisterState.goal_gradient` is a perpetually
+# 0.0 placeholder (see embodiment/sensors.py's own comment) until real goal
+# representation exists (self-model/Phase 7+) -- gating the interoception
+# candidate's goal_relevance on it would zero its salience in every real
+# run. Use a fixed baseline instead, same honest-baseline pattern as the
+# "memory" candidate's own fixed goal_relevance below.
+INTEROCEPTION_GOAL_RELEVANCE_BASELINE = 0.5
+
+
+def _clamp01(x: float) -> float:
+    return max(0.0, min(1.0, x))
 
 
 class TeicDaemon:
@@ -99,6 +138,8 @@ class TeicDaemon:
         self._memory_store: MemoryStore | None = None
         self._last_tick_wall_ts: float | None = None
         self._latest_tick_id: int | None = None
+        self._arbiter: WorkspaceArbiter | None = None
+        self._prior_salience_overrides: dict[str, float] | None = None
 
     @property
     def session_id(self) -> str:
@@ -132,6 +173,7 @@ class TeicDaemon:
             max_tempo_hz=self._settings.daemon.max_tempo_hz,
         )
         self._forward_model = ForwardModel()
+        self._arbiter = WorkspaceArbiter()
         self._protention = ProtentionBuffer()
         await vector_index.ensure_loaded(self._conn)
         await vector_index.ensure_table(self._conn)
@@ -188,6 +230,7 @@ class TeicDaemon:
         assert self._modulation is not None
         assert self._forward_model is not None
         assert self._protention is not None
+        assert self._arbiter is not None
         now = datetime.now(UTC)
         tempo_hz = self._current_tempo_hz
 
@@ -245,7 +288,10 @@ class TeicDaemon:
         affect_state = AffectState(
             valence=valence, arousal=arousal, mood=mood, tick_id=tick_id, ts=now
         )
-        modulation_params = self._modulation.compute(register_state, affect_state, mood)
+        modulation_params = self._modulation.compute(
+            register_state, affect_state, mood,
+            prior_salience_overrides=self._prior_salience_overrides,
+        )
         await self._conn.execute(
             "INSERT INTO affect_sample (tick_id, valence, arousal, mood, attractor_label, ts) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -267,6 +313,63 @@ class TeicDaemon:
         content = f"tick {tick_id}: valence={affect_state.valence:.3f} arousal={affect_state.arousal:.3f} " + " ".join(
             f"{channel}={value:.3f}" for channel, value in register_values.items()
         )
+
+        # Phase 5: collect this tick's real candidates, arbitrate, persist
+        # the broadcast, and fold every candidate's salience forward into
+        # next tick's ModulationParams -- see phase5-plan.md scope ruling 1.
+        # This must run before this tick's own memory write below, so the
+        # "memory" candidate (if any) can't trivially match itself.
+        mean_variance = sum(register_state.variances.values()) / len(register_state.variances)
+        interoception_candidate = WorkspaceCandidate(
+            source_module="interoception",
+            content={"registers": register_values, "tick_id": tick_id},
+            novelty=_clamp01(prediction_error),
+            # EWMA variance is unbounded (a noisy channel like latency_strain
+            # can spike its variance well past 1.0), so `1 - mean_variance`
+            # would hard-clamp to 0 precisely when things are noisiest --
+            # backwards for a confidence signal. 1/(1+var) saturates toward
+            # 0 as variance grows without ever needing a clamp to do it.
+            precision=1.0 / (1.0 + mean_variance),
+            affective_weight=_clamp01((abs(affect_state.valence) + affect_state.arousal) / 2.0),
+            goal_relevance=INTEROCEPTION_GOAL_RELEVANCE_BASELINE,
+        )
+        candidates = [interoception_candidate]
+        memory_results = await self._memory_store.query(
+            session_id=self._session_id,
+            query_text=content,
+            current_tick_id=tick_id,
+            current_valence=affect_state.valence,
+            current_arousal=affect_state.arousal,
+            retrieval_affect_weight=modulation_params.retrieval_affect_weight,
+            retrieval_k=1,
+        )
+        if memory_results:
+            top = memory_results[0]
+            candidates.append(
+                WorkspaceCandidate(
+                    source_module="memory",
+                    content={"memory_id": top.record.memory_id, "content": top.record.content},
+                    novelty=_clamp01(1.0 - top.activation_value),
+                    precision=_clamp01(top.semantic_match),
+                    affective_weight=_clamp01(abs(top.record.affect_valence)),
+                    goal_relevance=0.3,
+                )
+            )
+        broadcast = self._arbiter.select(candidates, affect_state, mood, tick_id)
+        await self._conn.execute(
+            "INSERT INTO workspace_broadcast (broadcast_id, tick_id, winner_source, salience_score, "
+            "novelty, precision_w, affective_w, goal_relevance, ignited, content, mineness_tag) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                broadcast.broadcast_id, tick_id, broadcast.winner.source_module,
+                broadcast.winner.salience, broadcast.winner.novelty, broadcast.winner.precision,
+                broadcast.winner.affective_weight, broadcast.winner.goal_relevance,
+                int(broadcast.ignited), json.dumps(broadcast.winner.content), broadcast.mineness_tag,
+            ),
+        )
+        await self._conn.commit()
+        self._prior_salience_overrides = salience_overrides(candidates, broadcast.winner)
+
         await self._memory_store.create(
             session_id=self._session_id,
             timescale="tau1_working",
