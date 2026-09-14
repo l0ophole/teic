@@ -130,6 +130,8 @@ def write_usage(info: dict, path: Path = USAGE_FILE) -> None:
         data = json.loads(path.read_text()) if path.exists() else {}
     except (json.JSONDecodeError, OSError):
         data = {}
+    if not isinstance(data, dict):
+        data = {}
     window = data.setdefault("windows", {})
     w = info.get("rateLimitType", "?")
     window[w] = {"utilization": info.get("utilization"),
@@ -167,9 +169,11 @@ def record_segment(label: str, res: SegmentResult, outcome: str,
 
 
 def write_current(label: str) -> None:
-    CURRENT_FILE.write_text(json.dumps(
+    tmp = CURRENT_FILE.with_name(CURRENT_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(
         {"label": label,
          "started_at": datetime.now(timezone.utc).isoformat()}) + "\n")
+    tmp.replace(CURRENT_FILE)
 
 
 def remove_current() -> None:
