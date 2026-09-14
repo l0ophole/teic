@@ -60,6 +60,13 @@ class ChannelInference:
         self._state[channel] = (new_mean, new_var)
         return self._state[channel]
 
+    def current(self, channel: str) -> tuple[float, float] | None:
+        """Current posterior (mean, variance) for `channel`, or `None` if
+        it has never been updated. Phase 6's `allostasis.py` reads this to
+        forecast trajectories from the same posterior `infer()` produces --
+        not a forked/parallel model, per phase6-plan.md task 4."""
+        return self._state.get(channel)
+
     def infer(self, raw: RawSensorSample, tick_id: int, ts: datetime) -> RegisterState:
         # `.model_dump()` once, rather than per-channel `getattr(raw, channel)`
         # with a dynamic string name: the latter types as `Any` under mypy

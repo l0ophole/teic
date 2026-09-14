@@ -15,6 +15,9 @@ backoff_base_s = 1.0
 [viability]
 monthly_budget_usd = 10.0
 harness_monthly_budget_usd = 5.0
+max_burn_rate_usd_per_tick = 0.05
+replenishment_amount_usd = 2.0
+forecast_horizon_ticks = 10
 allow_actual_termination = false
 termination_justification = ""
 

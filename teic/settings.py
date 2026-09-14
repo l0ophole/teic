@@ -33,8 +33,23 @@ class LLMSettings(BaseSettings):
 
 
 class ViabilitySettings(BaseSettings):
+    # `monthly_budget_usd` doubles as the ledger's starting reserve
+    # (teic/embodiment/viability_budget.py) -- a session starts each month
+    # with its full budget available, so there's no separate "starting
+    # budget" field to drift out of sync with this one.
     monthly_budget_usd: float = 10.0
     harness_monthly_budget_usd: float = 5.0
+    # Depletion-rate parameter: normalizes one tick's real LLM spend (read
+    # from teic/llm/cost.py, never synthetic) into the RegisterState
+    # burn_rate channel's 0..1 scale.
+    max_burn_rate_usd_per_tick: float = 0.05
+    # Replenishment action's fixed amount. Never applied automatically --
+    # only an explicit effector call to ViabilityBudget.replenish() adds
+    # this, which is the concrete mechanism behind "replenishment requires
+    # action, not a silent top-up."
+    replenishment_amount_usd: float = 2.0
+    # Allostatic forecast horizon (interoception/allostasis.py), in ticks.
+    forecast_horizon_ticks: int = 10
     allow_actual_termination: bool = False
     termination_justification: str = ""
 
