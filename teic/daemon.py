@@ -96,6 +96,22 @@ gate itself writes nothing on refusal), while a successful fire sets
 `self._terminated` and stops the heartbeat. `self._terminated` also makes
 `_on_tick` a no-op on any further call, since `Heartbeat.run_n_ticks()`
 (unlike `run()`) has no stop-event check of its own.
+
+Phase 7: after this tick's memory query (so `history_summary` reuses the
+same `MemoryStore.query()` results the "memory" workspace candidate reads,
+rather than a second query), `_on_tick` builds this tick's real `SelfModel`
+via `build_self_model()` from `register_state`/`affect_state`/
+`prediction_error`/the prior `SelfModel` and computes `ConfidenceEstimate`
+via `compute_confidence()`, persisting one `self_model` row per tick. Both
+the confidence estimate and the tick's own `broadcast.ignited` outcome are
+only known *after* this tick's own arbitration, so -- the same one-tick-lag
+pattern Phase 3/5/6 established for `prediction_error`/
+`salience_overrides`/`budget_reserve` -- they are stored on `self` and fed
+into *next* tick's `ModulationCompute.compute(confidence=..., prior_ignited=...)`
+call, not this tick's. Likewise, `identity_traits["goal_gradient"]` from this
+tick's self-model is stored and passed into *next* tick's
+`ChannelPipeline.process(goal_gradient=...)`, resolving `sensors.py`'s
+former `0.0` placeholder into a real (one-tick-lagged) signal.
 """
 
 from __future__ import annotations
@@ -123,11 +139,15 @@ from teic.memory.consolidation import IDLE_THRESHOLD_S, run_consolidation_pass
 from teic.memory.embeddings import get_default_model
 from teic.memory.store import MemoryStore
 from teic.models.affect import AffectState
+from teic.models.metacognition import ConfidenceEstimate
 from teic.models.registers import REGISTER_CHANNELS
+from teic.models.self_model import SelfModel
 from teic.models.tick import TickContext
 from teic.models.workspace import WorkspaceCandidate
 from teic.persistence.db import open_db
 from teic.persistence.log_sink import LogSink
+from teic.selfmodel.builder import build_self_model
+from teic.selfmodel.metacognition import compute_confidence
 from teic.settings import Settings
 from teic.temporal.heartbeat import Heartbeat
 from teic.temporal.protention import ProtentionBuffer, ProtentionEntry
@@ -186,6 +206,10 @@ class TeicDaemon:
         self._termination_gate: TerminationGate | None = None
         self._pricing: PricingCache | None = None
         self._terminated: bool = False
+        self._self_model: SelfModel | None = None
+        self._confidence: ConfidenceEstimate | None = None
+        self._prior_ignited: bool = False
+        self._prior_goal_gradient: float = 0.0
 
     @property
     def session_id(self) -> str:
@@ -339,6 +363,7 @@ class TeicDaemon:
             prediction_error=prediction_error,
             budget_reserve=budget_reserve,
             burn_rate=burn_rate,
+            goal_gradient=self._prior_goal_gradient,
         )
         raw = self._channels.last_raw
         assert raw is not None
@@ -365,6 +390,8 @@ class TeicDaemon:
         modulation_params = self._modulation.compute(
             register_state, affect_state, mood,
             prior_salience_overrides=self._prior_salience_overrides,
+            confidence=self._confidence,
+            prior_ignited=self._prior_ignited,
         )
         await self._conn.execute(
             "INSERT INTO affect_sample (tick_id, valence, arousal, mood, attractor_label, ts) "
@@ -450,6 +477,49 @@ class TeicDaemon:
                     goal_relevance=0.3,
                 )
             )
+        # Phase 7: build this tick's real self-model + confidence estimate.
+        # `history_summary` reuses the memory query results just fetched
+        # above (see module docstring's Phase 7 paragraph) rather than
+        # issuing a second MemoryStore.query() call.
+        history_summary = "; ".join(r.record.content for r in memory_results)
+        self_model = build_self_model(
+            register_state=register_state,
+            affect_state=affect_state,
+            prediction_error=prediction_error,
+            history_summary=history_summary,
+            prior=self._self_model,
+            tick_id=tick_id,
+        )
+        confidence = compute_confidence(
+            self_model=self_model,
+            prior_self_model=self._self_model,
+            prediction_error=prediction_error,
+            tick_id=tick_id,
+        )
+        await self._conn.execute(
+            "INSERT INTO self_model (session_id, tick_id, version, body, agency, "
+            "interoception_summary, history_summary, identity_traits, mental_state_estimate, "
+            "temporal_self, confidence, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                self._session_id,
+                tick_id,
+                self_model.version,
+                json.dumps(self_model.body),
+                self_model.agency,
+                json.dumps(self_model.interoception_summary),
+                self_model.history_summary,
+                json.dumps(self_model.identity_traits),
+                json.dumps(self_model.mental_state_estimate),
+                json.dumps(self_model.temporal_self),
+                confidence.confidence,
+                now.isoformat(),
+            ),
+        )
+        await self._conn.commit()
+        self._self_model = self_model
+        self._confidence = confidence
+        self._prior_goal_gradient = self_model.identity_traits.get("goal_gradient", 0.0)
+
         broadcast = self._arbiter.select(candidates, affect_state, mood, tick_id)
         await self._conn.execute(
             "INSERT INTO workspace_broadcast (broadcast_id, tick_id, winner_source, salience_score, "
@@ -464,6 +534,7 @@ class TeicDaemon:
         )
         await self._conn.commit()
         self._prior_salience_overrides = salience_overrides(candidates, broadcast.winner)
+        self._prior_ignited = broadcast.ignited
 
         # Phase 6: the real send-costing path through Phase 5's
         # render_prompt_if_ignited() seam. No network call is made (out of

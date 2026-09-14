@@ -9,23 +9,20 @@
 | 4 — Memory timescales, decay, consolidation | **Complete** | `docs/plans/phase4-notes.md` |
 | 5 — Workspace arbiter, ignition | **Complete** | `docs/plans/phase5-notes.md` |
 | 6 — Viability, allostasis | **Complete** | `docs/plans/phase6-notes.md` |
-| 7 — Self-model, metacognition | Not started | |
+| 7 — Self-model, metacognition | **Complete** | `docs/plans/phase7-notes.md` |
 | 8 — Assessment harness + falsifiers | Not started | |
 | 9 — UI (terminal + web) | Not started | |
 
 ## Current state / next step
 
-Phase 7 cp2 done: `teic/selfmodel/metacognition.py` `compute_confidence()`
-(prediction error + self-model stability -> calibrated `ConfidenceEstimate`);
-`ModulationCompute.compute()` threads confidence into `retrieval_k` (low
-confidence -> more info-seeking) and `tool_risk_tolerance` (high confidence
--> commit); `ReportabilityGate.evaluate()` composes ignition + confidence as
-a second path alongside the existing epistemic_tension threshold. No
-daemon-loop wiring yet. See `docs/plans/phase7-plan.md`.
+Phase 7 complete: `daemon.py` now builds a real `SelfModel`/
+`ConfidenceEstimate` each tick (persisted to the new `self_model` table)
+and threads `confidence`/`prior_ignited`/`goal_gradient` one-tick-lagged
+into modulation/sensing. Causal-efficacy gate test proves editing a
+self-model field predictably changes downstream behavior. See
+`docs/plans/phase7-notes.md`.
 
-Next: Phase 7 cp3 (workspace/arbiter wiring if needed, daemon tick-loop
-integration, persistence migration, full test_phase7 suite incl.
-causal-efficacy test) per `docs/plans/phase7-plan.md`.
+Next: Phase 8 — assessment harness + falsifiers, per `docs/plans/phase8-plan.md`.
 
 ## How to verify the build so far
 
@@ -62,3 +59,8 @@ python -m teic         # Ctrl+C; check data/teic.db: tick, register_sample,
   spend through `render_prompt_if_ignited`/`PricingCache`, bids a
   `"viability"` candidate on anticipatory pressure, replenishes only on
   that candidate winning + igniting, terminates only through the gate.
+- Phase 7: `build_self_model()`/`compute_confidence()` from real telemetry;
+  confidence/prior_ignited/goal_gradient one-tick-lagged into daemon
+  modulation/sensing; one `self_model` row persisted per tick; causal-
+  efficacy gate test proves a direct self-model edit predictably changes
+  downstream behavior.

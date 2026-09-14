@@ -516,3 +516,61 @@ within a single tick and replenishes; a termination gate that refuses and
 leaves the daemon running when unconfigured; and one that fires, logs
 permanently, and halts the daemon (with every further tick in the same
 `run_n_ticks()` call a true no-op) when configured.
+
+### Phase 7 — Self-model, metacognition (complete)
+
+- **`SelfModel` is built from the same real telemetry every other module
+  sees, never hand-authored.** `build_self_model()`
+  (`teic/selfmodel/builder.py`) derives `body`/`agency` from
+  `RegisterState`/`ForwardModel`'s own prediction-error comparator,
+  `interoception_summary` from `RegisterState.as_dict()` verbatim, and
+  `history_summary` from the same `MemoryStore.query()` call Phase 5's
+  memory candidate reads (reused, not a second query). `version`/
+  `temporal_self` carry forward across ticks via the prior `SelfModel`.
+- **`ConfidenceEstimate` is calibrated from two independent real signals.**
+  `compute_confidence()` (`teic/selfmodel/metacognition.py`) blends forward-
+  model prediction error (0.6 weight) with self-model stability — how much
+  `agency`/`mental_state_estimate` changed since the prior tick (0.4
+  weight); no prior self-model means maximal instability. This feeds
+  `ModulationCompute.compute(confidence=...)`: low confidence raises
+  `retrieval_k` (seek more info), high confidence raises
+  `tool_risk_tolerance` (commit to action) — and composes into
+  `ReportabilityGate.evaluate(ignited=..., confidence=...)` as a second
+  path alongside the original `epistemic_tension` threshold.
+- **The self-model is causally efficacious, not an inert side channel.**
+  `tests/test_gates/test_phase7.py`'s
+  `test_editing_self_model_field_causally_changes_downstream_behavior`
+  directly edits a `SelfModel` field via `.model_copy(update=...)` and
+  proves the edit alone — nothing else differs between the two branches —
+  predictably lowers `ConfidenceEstimate.confidence`, which in turn
+  predictably raises `retrieval_k` and lowers `tool_risk_tolerance`. This
+  is the Phase 7 gate's core claim.
+- **`goal_gradient` and `confidence`/`prior_ignited` follow the same
+  one-tick-lag convention Phase 3/6 established for `prediction_error`/
+  `budget_reserve`.** Both the confidence estimate and `broadcast.ignited`
+  are only known *after* a tick's own arbitration, so `_on_tick` stores
+  them on `self` and feeds them into *next* tick's
+  `ModulationCompute.compute()` call. Likewise,
+  `SelfModel.identity_traits["goal_gradient"]` (mood scaled by the stable
+  `viability_preference` trait) is stored and passed into *next* tick's
+  `ChannelPipeline.process(goal_gradient=...)`, resolving `sensors.py`'s
+  former permanent `0.0` placeholder into a real signal.
+- **No `workspace/arbiter.py` or `mineness.py` change was needed.**
+  `WorkspaceArbiter.select()` was already generic over an arbitrary
+  candidate list (same conclusion Phase 6's `"viability"` candidate
+  reached), and the self-model's causal path to behavior runs through
+  `ModulationCompute`/`ReportabilityGate` directly — it does not need to
+  win workspace arbitration to have an effect, so no self-model-shaped
+  `WorkspaceCandidate` was added.
+- **One `self_model` row persisted per tick**
+  (`teic/persistence/migrations/0005_self_model.sql`): every `SelfModel`
+  field plus that tick's `confidence`, so version/confidence history is
+  queryable across a whole run, not just held in daemon memory.
+
+Gate tests: `tests/test_gates/test_phase7.py` (unit-level — self-model
+construction, confidence calibration, modulation/reportability composition,
+and the causal-efficacy test above, all constructed directly) and
+`tests/test_phase7.py` (top-level, daemon-integration — drives the above
+through the real tick loop: `self_model` row persistence and version
+increment across real ticks, and confidence/goal_gradient correctly lagged
+one tick into real downstream sensing/modulation calls).

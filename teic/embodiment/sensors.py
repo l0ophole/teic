@@ -4,14 +4,18 @@
 early (`latency_strain` from tick timing jitter, `context_pressure` from
 pending input volume) plus a derived volatility signal, and holds every
 other channel at a documented placeholder until the phase that wires it:
-burn_rate/budget_reserve -> 6, epistemic_tension -> 2/7, goal_gradient ->
-whenever real goal representation exists (self-model/Phase 7+ -- Phase 5's
-workspace arbiter turned out not to need a real goal_gradient value itself,
-see phase5-plan.md scope ruling 5; it uses a fixed baseline instead of this
-channel), memory_fragmentation -> 4, social_contact -> 9, effector_integrity ->
-whenever an LLM call is actually attempted (also 6+). `prediction_error` is
-threaded through from the caller as of Phase 3 (see `teic/daemon.py`'s
-`ForwardModel`/`ProtentionBuffer` wiring) rather than computed here.
+burn_rate/budget_reserve -> 6, epistemic_tension -> 2/7, goal_gradient -> 7
+(Phase 5's workspace arbiter turned out not to need a real goal_gradient
+value itself, see phase5-plan.md scope ruling 5; it uses a fixed baseline
+instead of this channel), memory_fragmentation -> 4, social_contact -> 9,
+effector_integrity -> whenever an LLM call is actually attempted (also 6+).
+`prediction_error` is threaded through from the caller as of Phase 3 (see
+`teic/daemon.py`'s `ForwardModel`/`ProtentionBuffer` wiring) rather than
+computed here. `goal_gradient` is threaded through the same way as of Phase
+7: `daemon.py` passes *last* tick's `SelfModel.identity_traits["goal_gradient"]`
+(the dependency only closes across a tick boundary -- see
+`teic/selfmodel/builder.py`'s own docstring), defaulting to `0.0` before any
+self-model exists.
 
 Constructed once per session (not per tick): it holds a ring buffer of
 recent `latency_strain` values, so state must persist across `sample()`
@@ -79,6 +83,7 @@ class SensorArray:
         prediction_error: float = 0.0,
         budget_reserve: float = 1.0,
         burn_rate: float = 0.0,
+        goal_gradient: float = 0.0,
     ) -> RawSensorSample:
         # Not guarded against tempo_hz == 0.0: every producer of TickContext
         # in this codebase (Heartbeat) takes tempo_hz as a positive-Hz
@@ -106,7 +111,10 @@ class SensorArray:
             effector_integrity=1.0,  # no LLM call attempted yet
             latency_strain=latency_strain,
             epistemic_tension=0.0,  # wired in Phase 2/7
-            goal_gradient=0.0,  # wired once real goal representation exists (self-model/Phase 7+)
+            # Phase 7: threaded in from the caller (teic/daemon.py), same
+            # one-tick-lag pattern as budget_reserve/burn_rate -- last
+            # tick's real SelfModel-derived value, not computed here.
+            goal_gradient=goal_gradient,
             memory_fragmentation=0.0,  # wired in Phase 4
             social_contact=0.0,  # wired in Phase 9
         )

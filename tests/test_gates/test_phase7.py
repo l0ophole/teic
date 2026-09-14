@@ -1,4 +1,4 @@
-"""Phase 7 cp1/cp2 gate -- self-model-construction, metacognition-and-modulation.
+"""Phase 7 cp1/cp2/cp3 gate -- self-model-construction, metacognition-and-modulation.
 
 cp1 (see docs/plans/phase7-plan.md): `SelfModel` must be built from real
 telemetry (RegisterState/AffectState/ForwardModel prediction error), not
@@ -8,8 +8,14 @@ cp2: calibrated confidence must derive from real signals (prediction error,
 self-model stability), and must have a real non-linguistic behavioral
 effect -- low confidence raises retrieval/exploration, high confidence
 raises tool risk tolerance -- and compose into the reportability gate
-alongside ignition/epistemic_tension. Daemon-loop wiring is cp3 scope, not
-tested here.
+alongside ignition/epistemic_tension.
+
+cp3: the Phase 7 gate's core claim -- the self-model is *causally
+efficacious*, not an inert side channel -- directly editing a `SelfModel`
+field must predictably change downstream behavior via
+`compute_confidence()`/`ModulationCompute.compute()`. Daemon-loop wiring
+itself (the actual tick-by-tick threading of these values) is exercised by
+the top-level `tests/test_phase7.py`, not here.
 """
 
 from __future__ import annotations
@@ -246,3 +252,60 @@ def test_reportability_gate_composes_ignition_and_confidence_with_epistemic_tens
 
     # The original epistemic_tension threshold path still works unaided.
     assert gate.evaluate(0.5) is True
+
+
+def test_editing_self_model_field_causally_changes_downstream_behavior() -> None:
+    """Phase 7 gate's core claim: the self-model is causally efficacious.
+
+    Directly editing a `SelfModel` field (`mental_state_estimate["valence"]`,
+    part of the stability comparison `compute_confidence()` makes against
+    `prior_self_model`) must predictably change the confidence estimate,
+    which in turn must predictably change `ModulationCompute.compute()`'s
+    real behavioral outputs (`retrieval_k`, `tool_risk_tolerance`) -- not
+    just be computed and then ignored. This is a causal claim, not just a
+    correlational one: the edit is the *only* thing that differs between
+    the two branches below.
+    """
+    register_state = _register_state()
+    affect_state = _affect_state(valence=0.0, arousal=0.0, mood=0.0)
+    prior = build_self_model(
+        register_state=register_state, affect_state=affect_state,
+        prediction_error=0.0, history_summary="", prior=None, tick_id=1,
+    )
+    current = build_self_model(
+        register_state=register_state, affect_state=affect_state,
+        prediction_error=0.0, history_summary="", prior=prior, tick_id=2,
+    )
+
+    # Directly edit the field: simulate a self-model that drifted sharply in
+    # its own belief about its valence, with nothing else changed.
+    drifted = current.model_copy(
+        update={
+            "mental_state_estimate": {
+                **current.mental_state_estimate, "valence": 5.0,
+            }
+        }
+    )
+
+    stable_confidence = compute_confidence(
+        self_model=current, prior_self_model=prior, prediction_error=0.0, tick_id=2,
+    )
+    drifted_confidence = compute_confidence(
+        self_model=drifted, prior_self_model=prior, prediction_error=0.0, tick_id=2,
+    )
+
+    # The edit alone must lower confidence (more instability -> less trust).
+    assert drifted_confidence.confidence < stable_confidence.confidence
+
+    compute = ModulationCompute(idle_tempo_hz=0.2, max_tempo_hz=5.0)
+    stable_params = compute.compute(
+        register_state, affect_state, mood=0.0, confidence=stable_confidence,
+    )
+    drifted_params = compute.compute(
+        register_state, affect_state, mood=0.0, confidence=drifted_confidence,
+    )
+
+    # The lowered confidence must, in turn, predictably shift real behavior:
+    # more retrieval (info-seeking) and lower tool risk tolerance.
+    assert drifted_params.retrieval_k > stable_params.retrieval_k
+    assert drifted_params.tool_risk_tolerance < stable_params.tool_risk_tolerance
