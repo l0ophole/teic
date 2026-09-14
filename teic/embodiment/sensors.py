@@ -42,6 +42,10 @@ class RawSensorSample(BaseModel):
     social_contact: float
 
 
+# Dev-time invariant check, not a runtime guard: this is stripped under
+# `python -O`. It exists so a future edit to REGISTER_CHANNELS or
+# RawSensorSample that drifts the two apart fails loudly at import time in
+# normal (non-optimized) test/dev runs, rather than silently.
 assert set(RawSensorSample.model_fields) == set(REGISTER_CHANNELS), (
     "RawSensorSample must have exactly one field per REGISTER_CHANNELS entry"
 )
@@ -60,6 +64,11 @@ class SensorArray:
         self._latency_history: deque[float] = deque(maxlen=_LATENCY_HISTORY_LEN)
 
     def sample(self, tick_ctx: TickContext) -> RawSensorSample:
+        # Not guarded against tempo_hz == 0.0: every producer of TickContext
+        # in this codebase (Heartbeat) takes tempo_hz as a positive-Hz
+        # config value, so a zero tempo would already be a misconfiguration
+        # upstream. Not this module's job to defend against that -- if it
+        # ever needs to be, TickContext is the right place for validation.
         expected = 1.0 / tick_ctx.tempo_hz
         latency_strain = min(max(abs(tick_ctx.dt_real - expected) / expected, 0.0), 5.0)
 
