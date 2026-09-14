@@ -15,15 +15,17 @@
 
 ## Current state / next step
 
-Phase 7 cp1 done: `ConfidenceEstimate` model, `teic/selfmodel/build_self_model()`
-constructing `SelfModel` each tick from real `RegisterState`/`AffectState`/
-`ForwardModel` prediction error (not hand-authored); `goal_gradient`
-placeholder resolved into `identity_traits["goal_gradient"]` via mood
-(daemon sensor-wiring deferred to cp3). No metacognition/behavioral wiring
-yet. See `docs/plans/phase7-plan.md`.
+Phase 7 cp2 done: `teic/selfmodel/metacognition.py` `compute_confidence()`
+(prediction error + self-model stability -> calibrated `ConfidenceEstimate`);
+`ModulationCompute.compute()` threads confidence into `retrieval_k` (low
+confidence -> more info-seeking) and `tool_risk_tolerance` (high confidence
+-> commit); `ReportabilityGate.evaluate()` composes ignition + confidence as
+a second path alongside the existing epistemic_tension threshold. No
+daemon-loop wiring yet. See `docs/plans/phase7-plan.md`.
 
-Next: Phase 7 cp2 (metacognitive confidence + modulation/reportability
-wiring) per `docs/plans/phase7-plan.md`.
+Next: Phase 7 cp3 (workspace/arbiter wiring if needed, daemon tick-loop
+integration, persistence migration, full test_phase7 suite incl.
+causal-efficacy test) per `docs/plans/phase7-plan.md`.
 
 ## How to verify the build so far
 
