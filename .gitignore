@@ -20,3 +20,4 @@ data/reports/*.md
 data/reports/*.json
 data/pricing_cache.json
 !data/reports/.gitkeep
+2026-*.txt
