@@ -43,3 +43,7 @@ files = ["teic/models", "teic/interoception", "teic/workspace", "teic/llm", "tei
 [[tool.mypy.overrides]]
 module = "sqlite_vec"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tqdm.*"
+ignore_missing_imports = true

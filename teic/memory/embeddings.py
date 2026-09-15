@@ -27,14 +27,34 @@ class EmbeddingModel:
 
     def _get_model(self) -> object:
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
+            import threading
 
+            import tqdm
+            from sentence_transformers import SentenceTransformer
+            from transformers.utils.logging import disable_progress_bar
+
+            # Pre-seeds tqdm's write lock with a plain threading.RLock()
+            # *before* any tqdm bar (even a disabled one -- tqdm.__init__
+            # takes `self._lock` regardless of `disable`) gets a chance to
+            # lazily build its own via TqdmDefaultWriteLock, which reaches
+            # for multiprocessing.RLock() and so starts a resource_tracker
+            # subprocess. That subprocess spawn passes sys.stderr.fileno();
+            # under the terminal UI, Textual has redirected sys.stderr to a
+            # file-like whose fileno() deliberately returns -1, which
+            # crashes the spawn with "ValueError: bad value(s) in
+            # fds_to_keep" and hangs the daemon's tick loop forever. tqdm's
+            # own docs endorse set_lock() as the way to hand it a
+            # pre-built lock instead of letting it construct one itself.
+            tqdm.tqdm.set_lock(threading.RLock())
+            # Suppresses huggingface_hub's own tqdm download bars (weight
+            # files are already cached, but this covers a cold cache too).
+            disable_progress_bar()  # type: ignore[no-untyped-call]
             self._model = SentenceTransformer(MODEL_NAME, device="cpu")
         return self._model
 
     def encode(self, text: str) -> list[float]:
         model = self._get_model()
-        vector = model.encode(text)  # type: ignore[attr-defined]
+        vector = model.encode(text, show_progress_bar=False)  # type: ignore[attr-defined]
         return [float(x) for x in vector]
 
 
