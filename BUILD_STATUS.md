@@ -12,15 +12,18 @@
 | 7 — Self-model, metacognition | **Complete** | `docs/plans/phase7-notes.md` |
 | 8 — Assessment harness + falsifiers | **Complete** | `docs/plans/phase8-notes.md` |
 | 9 — UI (terminal + web) | **Complete** | `docs/plans/phase9-notes.md` |
+| 10 — Narrative constructor | **In progress (cp1 done)** | `docs/plans/phase10-notes.md` |
 
 ## Current state / next step
 
-Phase 9 complete: terminal TUI (`teic/interface/terminal/`) with real
-OpenRouter send, streaming chat, status panel, pause/resume/reset, log
-tail, a research-gated perturbation panel (wraps `BoundedPerturbation`),
-and an on-demand B1–B4 probe panel (gates B2 on `research.enabled`, same
-as `runner.py`). All Phase 9 checkpoints verified and committed. No
-further phase queued — see `docs/PlanBuildTEIC.md` for any v2 scope.
+Phase 10 cp1 done (commit `d806169`): mineness source-name bug fixed
+(`user_input`→`user_message`), `teic/workspace/narrative_constructor.py`
+built (`build_narrative_tail()`, no new model/migration needed — see
+phase10-notes.md). Not yet wired into `daemon.py:760` (cp2). Verified via
+targeted tests (mineness, narrative_constructor, daemon regression) +
+mypy, not the full `pytest -q` batch — that run is taking ~1hr in this
+environment and was killed rather than waited out; rerun it at a later
+checkpoint when time allows. Resume with "Continue Phase 10 at cp2".
 
 Post-phase-9 fix (commit `04a1097`): TUI hung at "waiting for first
 tick..." and crashed on quit with `ValueError: bad value(s) in
