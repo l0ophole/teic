@@ -5,17 +5,26 @@ real tick loop, real `WorkspaceArbiter`/`render_prompt_if_ignited` wiring --
 using a duck-typed fake `ChatClient` injected via the new constructor seam
 so no live network call ever happens in CI (matching Phase 8's
 no-live-LLM test convention).
+
+Phase 9 cp2: terminal TUI core widget-level tests using Textual's own
+`App.run_test()` pilot harness. These drive the *real* `TeicDaemon.run()`
+background task (not `run_n_ticks()`), so `tmp_tui_settings` below bumps
+`base_tempo_hz` well above the default 1.0 so ticks land fast enough for a
+test timeout without faking the clock -- `Heartbeat`'s injectable
+`sleep_fn`/`time_source` seam isn't reachable through `TeicApp`, which
+always builds a real `Heartbeat` inside `TeicDaemon.start()`.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 
 from teic.daemon import TeicDaemon
 from teic.llm.client import ChatPrompt
-from teic.settings import Settings
+from teic.settings import DaemonSettings, Settings
 from teic.temporal.heartbeat import Heartbeat
 
 
@@ -108,3 +117,96 @@ async def test_ignited_response_is_streamed_persisted_and_charged(tmp_settings: 
     assert daemon._viability_budget.last_spend_usd == estimated_cost_usd
 
     await daemon.stop()
+
+
+@pytest.fixture
+def tmp_tui_settings(tmp_path: Path) -> Settings:
+    """Same shape as `tmp_settings` (no API key -> no live network call,
+    matching the no-live-LLM convention), but with a fast tempo so
+    `TeicApp`'s real background `daemon.run()` task produces ticks inside a
+    normal test timeout."""
+    db_path = tmp_path / "teic_tui_test.db"
+    return Settings(daemon=DaemonSettings(db_path=str(db_path), base_tempo_hz=200.0))
+
+
+@pytest.mark.asyncio
+async def test_tui_chat_send_enqueues_user_message(tmp_tui_settings: Settings) -> None:
+    """Submitting text in the chat input must both render a user-message
+    line in `ChatView` and reach the daemon's real `submit_user_message()`
+    queue -- the cp1 seam a queued message is drained from."""
+    from textual.widgets import Input
+
+    from teic.interface.terminal.app import TeicApp
+    from teic.interface.terminal.chat_view import ChatView
+
+    app = TeicApp(tmp_tui_settings)
+    async with app.run_test() as pilot:
+        chat_view = app.query_one(ChatView)
+        before = len(list(chat_view.children))
+
+        input_widget = app.query_one("#chat-input", Input)
+        input_widget.focus()
+        input_widget.value = "hello there"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert len(list(chat_view.children)) == before + 1
+        assert app.query_one("#chat-input", Input).value == ""
+
+        # The fast test tempo means the queued message is very likely
+        # already drained by `_on_tick` into a `user_message`
+        # `WorkspaceCandidate` (see cp1's guaranteed-ignition test) by the
+        # time we get here -- confirm via the real `workspace_broadcast`
+        # row rather than racing the queue's `qsize()`.
+        winner_source = None
+        for _ in range(25):
+            await pilot.pause(0.02)
+            cursor = await app.daemon.conn.execute(
+                "SELECT winner_source FROM workspace_broadcast wb JOIN tick t "
+                "ON wb.tick_id = t.tick_id WHERE t.session_id = ? AND wb.winner_source = 'user_message'",
+                (app.daemon.session_id,),
+            )
+            row = await cursor.fetchone()
+            if row is not None:
+                winner_source = row[0]
+                break
+        assert winner_source == "user_message"
+
+
+@pytest.mark.asyncio
+async def test_tui_status_panel_updates_on_tick(tmp_tui_settings: Settings) -> None:
+    """The status panel must reflect a real `TickSnapshot` from the
+    daemon's background `run()` task without any manual polling call."""
+    from teic.interface.terminal.app import TeicApp
+    from teic.interface.terminal.status_panel import StatusPanel
+
+    app = TeicApp(tmp_tui_settings)
+    async with app.run_test() as pilot:
+        for _ in range(20):
+            await pilot.pause(0.02)
+            panel = app.query_one(StatusPanel)
+            if panel._valence_history:
+                break
+        panel = app.query_one(StatusPanel)
+        assert len(panel._valence_history) > 0
+        assert len(panel._arousal_history) > 0
+
+
+@pytest.mark.asyncio
+async def test_tui_pause_resume_toggles_daemon_state(tmp_tui_settings: Settings) -> None:
+    """`action_toggle_pause` must flip `TeicDaemon.paused` (backed by the
+    new `Heartbeat.pause()`/`resume()` pair) both ways."""
+    from teic.interface.terminal.app import TeicApp
+    from teic.interface.terminal.controls import ControlsBar
+
+    app = TeicApp(tmp_tui_settings)
+    async with app.run_test():
+        assert app.daemon.paused is False
+
+        app.action_toggle_pause()
+        assert app.daemon.paused is True
+        assert app.query_one(ControlsBar)._paused is True
+
+        app.action_toggle_pause()
+        assert app.daemon.paused is False
+        assert app.query_one(ControlsBar)._paused is False

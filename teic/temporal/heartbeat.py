@@ -39,9 +39,25 @@ class Heartbeat:
         self._tempo_hz_provider = tempo_hz_provider
         self._tick_index = 0
         self._stop_event = asyncio.Event()
+        # Phase 9 cp2: TUI pause/resume control. Set == running, clear ==
+        # paused. Only `run()` (the TUI's real event loop) consults this --
+        # `run_n_ticks()` stays synchronous/unmodified, same rationale as
+        # every prior phase's "no gate test's behavior changes" note.
+        self._pause_event = asyncio.Event()
+        self._pause_event.set()
 
     def stop(self) -> None:
         self._stop_event.set()
+
+    def pause(self) -> None:
+        self._pause_event.clear()
+
+    def resume(self) -> None:
+        self._pause_event.set()
+
+    @property
+    def paused(self) -> bool:
+        return not self._pause_event.is_set()
 
     @property
     def tick_index(self) -> int:
@@ -50,6 +66,13 @@ class Heartbeat:
     async def run(self) -> None:
         last_ts = self._time_source()
         while not self._stop_event.is_set():
+            was_paused = self.paused
+            await self._pause_event.wait()
+            if self._stop_event.is_set():
+                break
+            if was_paused:
+                # Don't let paused wall-clock time leak into dt_real.
+                last_ts = self._time_source()
             interval = 1.0 / self._tempo_hz
             await self._sleep_fn(interval)
             if self._stop_event.is_set():

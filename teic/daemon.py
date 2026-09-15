@@ -121,6 +121,8 @@ import contextlib
 import json
 import time
 import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import aiosqlite
@@ -185,6 +187,28 @@ def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
+@dataclass(frozen=True, slots=True)
+class TickSnapshot:
+    """Phase 9 cp2: the TUI status panel's real state source. One is built
+    and dispatched to every registered listener at the end of each tick --
+    the "prefer the existing on_tick callback pattern over polling" call
+    from `phase9-plan.md`, mirroring `Heartbeat`'s own `on_tick` seam rather
+    than having the UI poll the database."""
+
+    tick_id: int
+    valence: float
+    arousal: float
+    tempo_hz: float
+    budget_reserve_usd: float
+    ignited: bool
+    winner_source: str
+    pending_input_count: int
+
+
+TickListener = Callable[[TickSnapshot], Awaitable[None]]
+ResponseChunkHandler = Callable[[str], Awaitable[None]]
+
+
 class TeicDaemon:
     def __init__(self, settings: Settings, llm_client: OpenRouterClient | None = None) -> None:
         self._settings = settings
@@ -222,6 +246,9 @@ class TeicDaemon:
         self._prior_goal_gradient: float = 0.0
         self._pending_user_messages: asyncio.Queue[str] = asyncio.Queue()
         self._current_tick_id: int | None = None
+        # Phase 9 cp2: TUI observer seams.
+        self._tick_listeners: list[TickListener] = []
+        self._on_response_chunk: ResponseChunkHandler | None = None
 
     async def submit_user_message(self, text: str) -> None:
         """The real "user can chat" input seam: queued here, drained one per
@@ -229,6 +256,33 @@ class TeicDaemon:
         first ever externally-sourced candidate, the rest all being
         internally generated (interoception/memory/viability)."""
         await self._pending_user_messages.put(text)
+
+    def add_tick_listener(self, listener: TickListener) -> None:
+        """Registers a callback invoked with a `TickSnapshot` at the end of
+        every tick -- the TUI status panel's update source."""
+        self._tick_listeners.append(listener)
+
+    def remove_tick_listener(self, listener: TickListener) -> None:
+        self._tick_listeners.remove(listener)
+
+    def set_response_chunk_handler(self, handler: ResponseChunkHandler | None) -> None:
+        """Wires a real per-chunk callback into `_handle_ignited_prompt`'s
+        `ChatClient.stream()` loop -- the TUI chat pane's token-by-token
+        streaming source, as opposed to `TickSnapshot`, which only carries
+        end-of-tick summary state."""
+        self._on_response_chunk = handler
+
+    def pause(self) -> None:
+        if self._heartbeat is not None:
+            self._heartbeat.pause()
+
+    def resume(self) -> None:
+        if self._heartbeat is not None:
+            self._heartbeat.resume()
+
+    @property
+    def paused(self) -> bool:
+        return self._heartbeat.paused if self._heartbeat is not None else False
 
     @property
     def session_id(self) -> str:
@@ -238,6 +292,10 @@ class TeicDaemon:
     def conn(self) -> aiosqlite.Connection:
         assert self._conn is not None, "daemon not started"
         return self._conn
+
+    @property
+    def is_running(self) -> bool:
+        return self._conn is not None
 
     async def start(self) -> None:
         self._conn = await open_db(self._settings.daemon.db_path)
@@ -369,6 +427,8 @@ class TeicDaemon:
         try:
             async for chunk in self._llm_client.stream(prompt):
                 response_text += chunk
+                if self._on_response_chunk is not None:
+                    await self._on_response_chunk(chunk)
         except Exception as exc:  # noqa: BLE001 - any send failure must degrade, never crash the tick
             status = "error"
             error_detail = str(exc)
@@ -753,4 +813,21 @@ class TeicDaemon:
                 predicted_registers=register_state.as_dict(),
             )
         )
+
+        if self._tick_listeners:
+            snapshot = TickSnapshot(
+                tick_id=tick_id,
+                valence=affect_state.valence,
+                arousal=affect_state.arousal,
+                tempo_hz=tempo_hz,
+                budget_reserve_usd=self._viability_budget.reserve_usd,
+                ignited=broadcast.ignited,
+                winner_source=broadcast.winner.source_module,
+                pending_input_count=self._pending_user_messages.qsize(),
+            )
+            for listener in list(self._tick_listeners):
+                try:
+                    await listener(snapshot)
+                except Exception:  # noqa: BLE001 - a UI listener failure must never break the tick
+                    pass
         self._current_tempo_hz = modulation_params.tempo_hz

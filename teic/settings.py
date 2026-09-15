@@ -61,6 +61,9 @@ class ResearchSettings(BaseSettings):
 class InterfaceSettings(BaseSettings):
     web_host: str = "127.0.0.1"
     web_port: int = 8420
+    # Phase 9 cp2: terminal TUI's unfiltered log tail depth (v1 has no
+    # filter/search -- see phase9-plan.md's cp1 log-surface decision).
+    tui_log_tail_rows: int = 200
 
 
 def _load_toml(path: Path) -> dict[str, Any]:

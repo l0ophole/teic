@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import sys
 
 from teic.daemon import TeicDaemon
 from teic.settings import load_settings
@@ -26,6 +27,11 @@ async def _main() -> None:
 
 
 def main() -> None:
+    if "--tui" in sys.argv:
+        from teic.interface.terminal.app import TeicApp
+
+        TeicApp().run()
+        return
     asyncio.run(_main())
 
 

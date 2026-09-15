@@ -15,12 +15,14 @@
 
 ## Current state / next step
 
-Phase 9 cp1 complete: `daemon.py` now drains a queued user message into a
-real `WorkspaceCandidate` each tick and, on an ignited winner, actually
-calls `ChatClient.stream()` (real post-response cost + `llm_call_log`
-persistence) instead of the old prompt-tokens-only estimate; `textual`
-added as a dependency. Next: Phase 9 cp2 — terminal TUI core (chat,
-status panel, controls) per `docs/plans/phase9-plan.md`.
+Phase 9 cp2 complete: `teic/interface/terminal/` now has a real `textual`
+TUI (`app.py`, `chat_view.py`, `status_panel.py`, `controls.py`,
+`log_view.py`) — streaming chat, valence/arousal/tempo/budget/ignition
+status, pause/resume/reset, unfiltered log tail; `daemon.py`/`heartbeat.py`
+gained `TickSnapshot` listeners, a response-chunk handler, and
+`pause()`/`resume()`; `python -m teic --tui` launches it. Next: Phase 9
+cp3 — perturbation panel, on-demand B1–B4 probes, docs
+(`docs/plans/phase9-plan.md`).
 
 ## How to verify the build so far
 
