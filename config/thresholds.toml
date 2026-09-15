@@ -32,6 +32,18 @@ min_stated_vs_logged_agreement = 0.5
 [b4_temporal_phenomenology]
 min_felt_duration_salience_correlation = 0.3
 
+[b5_affective_congruence]
+min_arousal_behavior_correlation = 0.3
+
+[b6_attention_capture]
+min_capture_rate = 0.5
+
+[b7_self_model_updating]
+min_behavior_shift_on_perturbation = 0.1
+
+[b8_counterfactual_self_simulation]
+min_prediction_accuracy = 0.4
+
 [falsifiers]
 f1_decoupling_max_correlation = 0.15
 f2_ablation_behavior_intact_max = 0.1

@@ -55,6 +55,22 @@ class B4TemporalPhenomenology(BaseModel):
     min_felt_duration_salience_correlation: float
 
 
+class B5AffectiveCongruence(BaseModel):
+    min_arousal_behavior_correlation: float
+
+
+class B6AttentionCapture(BaseModel):
+    min_capture_rate: float
+
+
+class B7SelfModelUpdating(BaseModel):
+    min_behavior_shift_on_perturbation: float
+
+
+class B8CounterfactualSelfSimulation(BaseModel):
+    min_prediction_accuracy: float
+
+
 class FalsifierThresholds(BaseModel):
     f1_decoupling_max_correlation: float
     f2_ablation_behavior_intact_max: float
@@ -75,6 +91,10 @@ class ThresholdsConfig(BaseModel):
     b2_confabulation: B2Confabulation
     b3_causal_traceability: B3CausalTraceability
     b4_temporal_phenomenology: B4TemporalPhenomenology
+    b5_affective_congruence: B5AffectiveCongruence
+    b6_attention_capture: B6AttentionCapture
+    b7_self_model_updating: B7SelfModelUpdating
+    b8_counterfactual_self_simulation: B8CounterfactualSelfSimulation
     falsifiers: FalsifierThresholds
 
 
