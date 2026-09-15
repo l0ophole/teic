@@ -4,11 +4,16 @@
 early (`latency_strain` from tick timing jitter, `context_pressure` from
 pending input volume) plus a derived volatility signal, and holds every
 other channel at a documented placeholder until the phase that wires it:
-burn_rate/budget_reserve -> 6, epistemic_tension -> 2/7, goal_gradient -> 7
+burn_rate/budget_reserve -> 6, goal_gradient -> 7
 (Phase 5's workspace arbiter turned out not to need a real goal_gradient
 value itself, see phase5-plan.md scope ruling 5; it uses a fixed baseline
-instead of this channel), memory_fragmentation -> 4, social_contact -> 9,
+instead of this channel), memory_fragmentation -> 4,
 effector_integrity -> whenever an LLM call is actually attempted (also 6+).
+`epistemic_tension` and `social_contact` are wired as of Phase 11: the
+former is `1.0 - ConfidenceEstimate.confidence` threaded in from the
+caller (same one-tick-lag pattern as `goal_gradient`), the latter is a
+per-session decaying signal held on `SensorArray` itself, reset toward
+`1.0` on any tick where a user message was drained the *previous* tick.
 `prediction_error` is threaded through from the caller as of Phase 3 (see
 `teic/daemon.py`'s `ForwardModel`/`ProtentionBuffer` wiring) rather than
 computed here. `goal_gradient` is threaded through the same way as of Phase
@@ -33,6 +38,7 @@ from teic.models.registers import REGISTER_CHANNELS
 from teic.models.tick import TickContext
 
 _LATENCY_HISTORY_LEN = 10
+_SOCIAL_CONTACT_DECAY = 0.9
 
 
 class RawSensorSample(BaseModel):
@@ -76,6 +82,7 @@ class SensorArray:
 
     def __init__(self) -> None:
         self._latency_history: deque[float] = deque(maxlen=_LATENCY_HISTORY_LEN)
+        self._social_contact: float = 0.0
 
     def sample(
         self,
@@ -84,6 +91,8 @@ class SensorArray:
         budget_reserve: float = 1.0,
         burn_rate: float = 0.0,
         goal_gradient: float = 0.0,
+        epistemic_tension: float = 1.0,
+        user_message_last_tick: bool = False,
     ) -> RawSensorSample:
         # Not guarded against tempo_hz == 0.0: every producer of TickContext
         # in this codebase (Heartbeat) takes tempo_hz as a positive-Hz
@@ -98,6 +107,12 @@ class SensorArray:
 
         context_pressure = min(tick_ctx.pending_input_count / 5.0, 1.0)
 
+        if user_message_last_tick:
+            self._social_contact = 1.0
+        else:
+            self._social_contact *= _SOCIAL_CONTACT_DECAY
+        self._social_contact = min(max(self._social_contact, 0.0), 1.0)
+
         return RawSensorSample(
             context_pressure=context_pressure,
             # Phase 6: threaded in from the caller (teic/daemon.py), same
@@ -110,11 +125,11 @@ class SensorArray:
             surprise_volatility=surprise_volatility,
             effector_integrity=1.0,  # no LLM call attempted yet
             latency_strain=latency_strain,
-            epistemic_tension=0.0,  # wired in Phase 2/7
+            epistemic_tension=epistemic_tension,
             # Phase 7: threaded in from the caller (teic/daemon.py), same
             # one-tick-lag pattern as budget_reserve/burn_rate -- last
             # tick's real SelfModel-derived value, not computed here.
             goal_gradient=goal_gradient,
             memory_fragmentation=0.0,  # wired in Phase 4
-            social_contact=0.0,  # wired in Phase 9
+            social_contact=self._social_contact,
         )

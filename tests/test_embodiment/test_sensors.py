@@ -76,12 +76,40 @@ def test_placeholder_channels_hold_documented_defaults() -> None:
     sample = sensors.sample(_tick_ctx(0, dt_real=1.0, tempo_hz=1.0))
     assert sample.budget_reserve == 1.0
     assert sample.effector_integrity == 1.0
+    assert sample.epistemic_tension == 1.0
     for channel in (
         "burn_rate",
         "prediction_error",
-        "epistemic_tension",
         "goal_gradient",
         "memory_fragmentation",
         "social_contact",
     ):
         assert getattr(sample, channel) == 0.0
+
+
+def test_epistemic_tension_passthrough() -> None:
+    sensors = SensorArray()
+    default_sample = sensors.sample(_tick_ctx(0, dt_real=1.0, tempo_hz=1.0))
+    assert default_sample.epistemic_tension == 1.0
+
+    explicit_sample = sensors.sample(
+        _tick_ctx(1, dt_real=1.0, tempo_hz=1.0), epistemic_tension=0.3
+    )
+    assert explicit_sample.epistemic_tension == 0.3
+
+
+def test_social_contact_resets_and_decays() -> None:
+    sensors = SensorArray()
+    idle = sensors.sample(_tick_ctx(0, dt_real=1.0, tempo_hz=1.0))
+    assert idle.social_contact == 0.0
+
+    contacted = sensors.sample(
+        _tick_ctx(1, dt_real=1.0, tempo_hz=1.0), user_message_last_tick=True
+    )
+    assert contacted.social_contact == 1.0
+
+    decayed = sensors.sample(_tick_ctx(2, dt_real=1.0, tempo_hz=1.0))
+    assert 0.0 < decayed.social_contact < 1.0
+
+    further_decayed = sensors.sample(_tick_ctx(3, dt_real=1.0, tempo_hz=1.0))
+    assert 0.0 <= further_decayed.social_contact < decayed.social_contact

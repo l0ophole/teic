@@ -40,9 +40,17 @@ class ChannelPipeline:
         budget_reserve: float = 1.0,
         burn_rate: float = 0.0,
         goal_gradient: float = 0.0,
+        epistemic_tension: float = 1.0,
+        user_message_last_tick: bool = False,
     ) -> RegisterState:
         raw = self.sensors.sample(
-            tick_ctx, prediction_error, budget_reserve, burn_rate, goal_gradient
+            tick_ctx,
+            prediction_error,
+            budget_reserve,
+            burn_rate,
+            goal_gradient,
+            epistemic_tension,
+            user_message_last_tick,
         )
         self.last_raw = raw
         return self.inference.infer(raw, tick_id, ts)
