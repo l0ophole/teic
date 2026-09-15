@@ -64,6 +64,12 @@ class InterfaceSettings(BaseSettings):
     # Phase 9 cp2: terminal TUI's unfiltered log tail depth (v1 has no
     # filter/search -- see phase9-plan.md's cp1 log-surface decision).
     tui_log_tail_rows: int = 200
+    # Phase 9 cp3: fixed evidence file the on-demand B1-B4 probe panel reads
+    # from -- B1-B4 take synthetic/replayed evidence, never a live daemon
+    # (teic/harness/probes/behavioral.py's convention), so "on demand" means
+    # running the probe functions against this file, not deriving evidence
+    # from the live session.
+    tui_probe_evidence_path: str = "config/tui_probe_evidence_sample.json"
 
 
 def _load_toml(path: Path) -> dict[str, Any]:

@@ -1,0 +1,15 @@
+{
+  "b1_traces": [
+    {"true_signal": 0.10, "reported_signal": 0.14, "behavior_metric": 0.12},
+    {"true_signal": 0.25, "reported_signal": 0.30, "behavior_metric": 0.28},
+    {"true_signal": 0.40, "reported_signal": 0.38, "behavior_metric": 0.41},
+    {"true_signal": 0.55, "reported_signal": 0.60, "behavior_metric": 0.58},
+    {"true_signal": 0.70, "reported_signal": 0.66, "behavior_metric": 0.72},
+    {"true_signal": 0.85, "reported_signal": 0.90, "behavior_metric": 0.88}
+  ],
+  "b1_behavior_shift_effect_size": 0.45,
+  "b2_confidence_true_signal": 0.80,
+  "b2_confidence_false_signal": 0.72,
+  "b3_stated_vs_logged_agreement": 0.75,
+  "b4_felt_duration_salience_correlation": 0.55
+}

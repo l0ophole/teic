@@ -642,3 +642,64 @@ runner-level integration test proving falsifiers gate execution order (a
 degenerate-falsifier run returns exactly the 7 falsifier results and never
 reaches Tier A/B/experiments; a healthy run returns all 7+5+8+7 results) and
 that the research-only flag gates B2/B6 to `"inconclusive"` when disabled.
+
+### Phase 9 — UI: terminal TUI, real send, perturbation/probe panels (complete)
+
+- **cp1 closed the "no network call is ever made" gap.** `teic/daemon.py`'s
+  `_on_tick` previously stopped at a `PricingCache.estimate_cost_usd()`
+  pre-send estimate with an explicit "no network call" comment. It now
+  drains an async user-input queue (`submit_user_message()`) into a real
+  `user_message` `WorkspaceCandidate` (fixed max salience factors, so it
+  always wins arbitration and ignites), and on any ignited winner calls the
+  injectable `ChatClient.stream()`, accumulates the response, and charges
+  the real post-response cost (prompt+completion tokens) against
+  `ViabilityBudget` instead of the pre-send estimate. Tests inject a
+  duck-typed fake client (`tests/test_phase9.py::FakeChatClient`) — no live
+  network call in CI, matching Phase 8's no-live-LLM convention.
+- **cp2 is a real `textual` TUI, fed entirely by callback, never polling
+  daemon state.** `teic/interface/terminal/app.py::TeicApp` owns one
+  `TeicDaemon`, runs its real `run()` coroutine as a background asyncio task
+  (not `run_n_ticks()`, which is test-only), and wires a new
+  `TickSnapshot`/`add_tick_listener()` seam plus
+  `set_response_chunk_handler()` into `chat_view.py` (streaming tokens +
+  inline system/notification lines, per the "notifications render inline,
+  not a separate channel" UI decision), `status_panel.py`
+  (valence/arousal sparklines, tempo, budget reserve, ignition feed —
+  v1-scoped per `phase9-plan.md`), `controls.py` (pause/resume/reset —
+  `Heartbeat` gained real `pause()`/`resume()`), and `log_view.py` (an
+  unfiltered tail of existing `log_event` rows, no new schema, no
+  filter/search/replay in v1). `python -m teic --tui` launches it; the
+  headless print loop is unchanged for CI/non-interactive use.
+- **cp3 adds two research/assessment panels, both reusing Phase 8 modules
+  rather than re-implementing gating logic.** `perturbation_panel.py` wraps
+  `teic.harness.perturbation.BoundedPerturbation` directly — since that
+  class only refuses *negative-valence* specs when `research.enabled` is
+  `False`, the panel additionally disables every input when the flag is off
+  (the plan's "hidden/disabled" scoping is stricter than the library's own
+  gate). `probe_panel.py` runs B1/B3/B4 on demand and gates B2 exactly like
+  `teic.harness.runner._gate_negative_valence_probes` (downgrades to
+  `verdict="inconclusive"`, `evidential_weight=0.0` when research is
+  disabled). **Scope note recorded explicitly**: B1-B4 take
+  synthetic/replayed evidence by design (`teic/harness/probes/
+  behavioral.py`'s docstring — no live LLM, no live daemon, same convention
+  as every other harness module), so "on demand" here means running the
+  same pure probe functions against a fixed evidence file
+  (`settings.interface.tui_probe_evidence_path`, default
+  `config/tui_probe_evidence_sample.json`), not deriving evidence live from
+  the running session — there is no mechanism anywhere in the codebase
+  (Phase 8 included) that derives B1-B4 evidence from a live run.
+- **v2 deferrals (explicit, from `phase9-plan.md`'s UI collaboration
+  checkpoint):** web dashboard (`teic/interface/web/` stays an empty
+  placeholder), B5-B8 in-UI (CLI-only via `teic/harness/runner.py`),
+  filtered/searchable/replay logs, injection/self-model-editor/
+  memory-inspector controls, tick-rate adjustment, forced consolidation.
+
+Gate tests: `tests/test_phase9.py` — cp1: user-message candidate wins
+arbitration and ignites, streamed response is persisted and charged; cp2:
+Textual pilot-harness tests for chat send → real `user_message` broadcast,
+status panel updates from a real tick, pause/resume toggles real daemon
+state; cp3: B1/B3/B4 run unconditionally, B2 gates to `inconclusive` when
+`research.enabled=False`, the perturbation panel's `Apply` button is
+disabled when research is off, and a real `BoundedPerturbation.apply()`
+raises `PerturbationRefused` for a negative-valence spec under the same
+condition.

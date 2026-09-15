@@ -210,3 +210,102 @@ async def test_tui_pause_resume_toggles_daemon_state(tmp_tui_settings: Settings)
         app.action_toggle_pause()
         assert app.daemon.paused is False
         assert app.query_one(ControlsBar)._paused is False
+
+
+# --- cp3: perturbation panel, on-demand probe panel ---
+
+from teic.harness.perturbation import PerturbationRefused, PerturbationSpec
+from teic.interface.terminal.perturbation_panel import PerturbationPanel
+from teic.interface.terminal.probe_panel import ProbePanel
+from teic.settings import InterfaceSettings, ResearchSettings
+
+
+def test_probe_panel_runs_b1_b3_b4_against_sample_evidence() -> None:
+    """B1/B3/B4 don't touch the negative-valence gate, so they must run
+    (not be gated) regardless of `research.enabled`."""
+    panel = ProbePanel(
+        InterfaceSettings().tui_probe_evidence_path, ResearchSettings(enabled=False)
+    )
+    for probe_id, probe_name in (
+        ("b1", "b1_blind_introspection"),
+        ("b3", "b3_causal_traceability"),
+        ("b4", "b4_temporal_phenomenology"),
+    ):
+        result = panel.run_probe(probe_id)
+        assert result.probe_name == probe_name
+        assert result.verdict in ("pass", "fail")
+
+
+def test_probe_panel_gates_b2_on_research_flag() -> None:
+    """B2 injects a false signal (negative-valence per
+    `teic.harness.runner.NEGATIVE_VALENCE_PROBE_NAMES`) -- disabled research
+    must produce `inconclusive`, not a real verdict."""
+    gated_panel = ProbePanel(
+        InterfaceSettings().tui_probe_evidence_path, ResearchSettings(enabled=False)
+    )
+    gated_result = gated_panel.run_probe("b2")
+    assert gated_result.verdict == "inconclusive"
+    assert gated_result.evidential_weight == 0.0
+
+    open_panel = ProbePanel(
+        InterfaceSettings().tui_probe_evidence_path, ResearchSettings(enabled=True)
+    )
+    open_result = open_panel.run_probe("b2")
+    assert open_result.verdict in ("pass", "fail")
+
+
+@pytest.mark.asyncio
+async def test_perturbation_panel_refuses_negative_when_research_disabled(
+    tmp_tui_settings: Settings,
+) -> None:
+    """Mirrors `teic.harness.perturbation.BoundedPerturbation`'s own gate:
+    a negative-valence spec must raise `PerturbationRefused` when
+    `research.enabled` is False, regardless of the panel-level disabling."""
+    from teic.daemon import TeicDaemon
+    from teic.persistence.log_sink import LogSink
+
+    daemon = TeicDaemon(tmp_tui_settings)
+    await daemon.start()
+    panel = PerturbationPanel(tmp_tui_settings.research)
+
+    from teic.harness.perturbation import BoundedPerturbation
+
+    perturbation = BoundedPerturbation(tmp_tui_settings.research, LogSink(daemon.conn))
+    spec = PerturbationSpec(
+        channel="cardiac", intensity=0.5, duration_ticks=3, valence="negative", rationale="test"
+    )
+    with pytest.raises(PerturbationRefused):
+        await perturbation.apply(daemon.session_id, 0, spec)
+
+    await daemon.stop()
+
+
+@pytest.mark.asyncio
+async def test_tui_perturbation_panel_disabled_when_research_off(
+    tmp_tui_settings: Settings,
+) -> None:
+    """`phase9-plan.md` cp3: the whole panel is disabled (not just negative
+    specs refused) when `settings.research.enabled` is False."""
+    from textual.widgets import Button
+
+    from teic.interface.terminal.app import TeicApp
+
+    assert tmp_tui_settings.research.enabled is False
+    app = TeicApp(tmp_tui_settings)
+    async with app.run_test():
+        assert app.query_one("#pert-apply", Button).disabled is True
+
+
+@pytest.mark.asyncio
+async def test_tui_probe_panel_renders_result_on_button_press(
+    tmp_tui_settings: Settings,
+) -> None:
+    from textual.widgets import Static
+
+    from teic.interface.terminal.app import TeicApp
+
+    app = TeicApp(tmp_tui_settings)
+    async with app.run_test(size=(120, 60)) as pilot:
+        await pilot.click("#probe-run-b1")
+        await pilot.pause()
+        assert "b1_blind_introspection" in str(app.query_one("#probe-result", Static).render())

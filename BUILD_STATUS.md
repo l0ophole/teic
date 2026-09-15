@@ -11,18 +11,16 @@
 | 6 — Viability, allostasis | **Complete** | `docs/plans/phase6-notes.md` |
 | 7 — Self-model, metacognition | **Complete** | `docs/plans/phase7-notes.md` |
 | 8 — Assessment harness + falsifiers | **Complete** | `docs/plans/phase8-notes.md` |
-| 9 — UI (terminal + web) | In progress (cp1 done) | `docs/plans/phase9-plan.md` |
+| 9 — UI (terminal + web) | **Complete** | `docs/plans/phase9-notes.md` |
 
 ## Current state / next step
 
-Phase 9 cp2 complete: `teic/interface/terminal/` now has a real `textual`
-TUI (`app.py`, `chat_view.py`, `status_panel.py`, `controls.py`,
-`log_view.py`) — streaming chat, valence/arousal/tempo/budget/ignition
-status, pause/resume/reset, unfiltered log tail; `daemon.py`/`heartbeat.py`
-gained `TickSnapshot` listeners, a response-chunk handler, and
-`pause()`/`resume()`; `python -m teic --tui` launches it. Next: Phase 9
-cp3 — perturbation panel, on-demand B1–B4 probes, docs
-(`docs/plans/phase9-plan.md`).
+Phase 9 complete: terminal TUI (`teic/interface/terminal/`) with real
+OpenRouter send, streaming chat, status panel, pause/resume/reset, log
+tail, a research-gated perturbation panel (wraps `BoundedPerturbation`),
+and an on-demand B1–B4 probe panel (gates B2 on `research.enabled`, same
+as `runner.py`). All Phase 9 checkpoints verified and committed. No
+further phase queued — see `docs/PlanBuildTEIC.md` for any v2 scope.
 
 ## How to verify the build so far
 
@@ -69,3 +67,7 @@ python -m teic         # Ctrl+C; check data/teic.db: tick, register_sample,
   ablation/empty-clock/ignition/cost-bearing/contingency/persona
   experiments, combined by `runner.py` into one `AssessmentReport`;
   grading deliberately capped at L1/L2, no auto L3/L4.
+- Phase 9: real `ChatClient.stream()` send + `user_message` workspace
+  candidate; `textual` terminal TUI (chat, status, controls, log tail);
+  research-gated perturbation panel + on-demand B1–B4 probe panel reusing
+  Phase 8's gating conventions.

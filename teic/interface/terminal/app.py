@@ -22,6 +22,8 @@ from teic.interface.terminal import controls
 from teic.interface.terminal.chat_view import ChatView
 from teic.interface.terminal.controls import ControlsBar
 from teic.interface.terminal.log_view import LogView
+from teic.interface.terminal.perturbation_panel import PerturbationPanel
+from teic.interface.terminal.probe_panel import ProbePanel
 from teic.interface.terminal.status_panel import StatusPanel
 from teic.settings import Settings, load_settings
 
@@ -33,10 +35,23 @@ Screen {
     layout: horizontal;
     height: 1fr;
 }
+#side-col {
+    width: 40;
+    layout: vertical;
+}
 StatusPanel {
-    width: 34;
     border: solid $accent;
     padding: 0 1;
+}
+PerturbationPanel {
+    border: solid $warning;
+    padding: 0 1;
+    height: auto;
+}
+ProbePanel {
+    border: solid $secondary;
+    padding: 0 1;
+    height: auto;
 }
 #main-col {
     width: 1fr;
@@ -74,7 +89,14 @@ class TeicApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="body"):
-            yield StatusPanel(id="status-panel")
+            with Vertical(id="side-col"):
+                yield StatusPanel(id="status-panel")
+                yield PerturbationPanel(self._settings.research, id="perturbation-panel")
+                yield ProbePanel(
+                    self._settings.interface.tui_probe_evidence_path,
+                    self._settings.research,
+                    id="probe-panel",
+                )
             with Vertical(id="main-col"):
                 yield ChatView(id="chat-view")
                 yield LogView(self._settings.interface.tui_log_tail_rows, id="log-view")
@@ -116,6 +138,7 @@ class TeicApp(App[None]):
 
     async def _on_tick_snapshot(self, snapshot: TickSnapshot) -> None:
         self.query_one(StatusPanel).update_snapshot(snapshot)
+        self.query_one(PerturbationPanel).set_tick_id(snapshot.tick_id)
         chat_view = self.query_one(ChatView)
         if chat_view.is_streaming:
             chat_view.end_streaming_turn()
@@ -143,6 +166,8 @@ class TeicApp(App[None]):
         await chat_view.clear()
         self.query_one(StatusPanel).reset()
         self.query_one(LogView).reset()
+        self.query_one(PerturbationPanel).reset()
+        self.query_one(ProbePanel).reset()
         self.query_one(ControlsBar).set_paused(False)
         await chat_view.add_system_message(f"session reset: {self.daemon.session_id}")
 
