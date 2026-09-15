@@ -18,5 +18,9 @@ def test_interoception_and_memory_are_self():
     assert mineness_tag(_candidate("memory")) == "self"
 
 
-def test_user_input_is_other():
-    assert mineness_tag(_candidate("user_input")) == "other"
+def test_user_message_is_other():
+    assert mineness_tag(_candidate("user_message")) == "other"
+
+
+def test_viability_is_self():
+    assert mineness_tag(_candidate("viability")) == "self"
