@@ -1,0 +1,79 @@
+ ▐▛███▛█   Claude Code v2.1.270
+▝▜██████▀  Sonnet 5 · Claude Pro
+  ▝▝ ▝▝    /mnt/ide/teamssd/part1/projects/teic
+
+
+❯ Read BUILD_STATUS.md (table + "Current state" only) and the Phase 9 sections  
+  of docs/PlanBuildTEIC.md. Write docs/plans/phase9-plan.md: file-by-file build 
+  order, a "## Checkpoints" section listing 2-3 session-end checkpoints as "-   
+  cp1: <name> - <what is done>", and a "context to read" list. Do not start     
+  building.                                                                     
+
+  Searched for 3 patterns, read 2 files (ctrl+o to expand)
+
+● User answered Claude's questions:
+  ⎿  · Phase 9 UI: what interface type should the plan target? → Terminal TUI 
+     (textual/rich) (Recommended)
+     · Which live internal state should the UI surface (v1)? → Core set: 
+     valence/arousal, tempo, budget, ignition events (Recommended)
+     · Which manual controls should ship in v1? → Pause/resume + session reset 
+     only (Recommended)
+     · Should v1 include the research-only perturbation control surface 
+     (simulate channel drops, etc.)? → Yes, gated behind a research-only flag 
+     (Recommended)
+
+● User answered Claude's questions:
+  ⎿  · Chat surface: how should the agent's turns render in the TUI? → Streaming
+     tokens (Recommended)
+     · Should the agent be able to proactively message the user when homeostatic
+     thresholds cross? → Yes — inline system-style message in the same pane 
+     (Recommended)
+     · Which Tier B probes should ship in the v1 UI (assessment harness 
+     integration)? → B1–B4 minimum (Recommended)
+     · Log surface: how much log/history capability does v1 need? → Simple tail,
+     unfiltered (Recommended)
+
+● Now let me check existing config/settings for OpenRouter defaults and
+  persistence backend rather than re-asking.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Good, existing defaults suffice (no need to re-ask). Now let's check the repo
+  structure for existing UI-relevant code and the teic package layout to plan
+  file-by-file.
+
+  Searched for 4 patterns, read 3 files, listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+● Good template. Now writing the Phase 9 plan.
+
+● Write(docs/plans/phase9-plan.md)
+  ⎿  Wrote 149 lines to docs/plans/phase9-plan.md
+       1 # Phase 9 plan — UI (terminal TUI)
+       2 
+         tus, and
+       4 optionally perturb state.
+       5 
+       7 
+       8 - **Interface type:** terminal TUI (`textual`/`rich`). New runti
+         me
+         endencies
+      10   beyond the stack listed without asking" — flag at cp1).
+     … +206 lines (ctrl+o to expand)
+
+● Phase 9 plan written to docs/plans/phase9-plan.md. Per the project's build
+  protocol, this is plan-only — no implementation started.
+
+  Key points from the plan:
+  - Recorded the 8 UI decisions you just made (terminal TUI, streaming chat,
+    core status set, minimal controls, research-gated perturbation panel, inline
+    notifications, B1–B4 in-UI, unfiltered log tail).
+  - Flagged the real gap: no phase yet makes a live OpenRouter call or has a
+    user-message workspace candidate — daemon.py's ignited-send seam is
+    currently a cost estimate with "no network call" — so cp1 wires that up
+    headlessly before any TUI code exists.
+  - 3 checkpoints: cp1 (real send + user candidate), cp2 (TUI core:
+    chat/status/controls/logs), cp3 (perturbation + probe panels + docs).
+  - Noted textual as a new dependency to confirm with you at cp1 per the "no
+    deps beyond the stack without asking" rule.
+
+✻ Baked for 2m 1s · done 8:39 PM

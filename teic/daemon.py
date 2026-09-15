@@ -132,7 +132,9 @@ from teic.interoception.allostasis import AllostaticForecaster
 from teic.interoception.channels import ChannelPipeline
 from teic.interoception.modulation import ModulationCompute
 from teic.interoception.mood import MoodTracker
+from teic.llm.client import ChatPrompt, OpenRouterClient
 from teic.llm.cost import PricingCache
+from teic.llm.schema import CallStatus, LLMCallLog
 from teic.embodiment.viability_budget import ViabilityBudget
 from teic.memory import vector_index
 from teic.memory.consolidation import IDLE_THRESHOLD_S, run_consolidation_pass
@@ -142,6 +144,7 @@ from teic.models.affect import AffectState
 from teic.models.metacognition import ConfidenceEstimate
 from teic.models.registers import REGISTER_CHANNELS
 from teic.models.self_model import SelfModel
+from teic.models.log_event import LogEvent
 from teic.models.tick import TickContext
 from teic.models.workspace import WorkspaceCandidate
 from teic.persistence.db import open_db
@@ -183,8 +186,15 @@ def _clamp01(x: float) -> float:
 
 
 class TeicDaemon:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, llm_client: OpenRouterClient | None = None) -> None:
         self._settings = settings
+        # Test-injectable seam (Phase 9 cp1): pass a fake/mock client to
+        # exercise the real send path without a live network call. Left
+        # `None` in production until `start()` builds a real one -- gated on
+        # a configured API key so every pre-Phase-9 gate test (no key set in
+        # `tests/conftest.py`'s `tmp_settings`) keeps ignited ticks
+        # network-call-free without needing to inject anything itself.
+        self._llm_client = llm_client
         self._conn: aiosqlite.Connection | None = None
         self._log_sink: LogSink | None = None
         self._session_id: str = str(uuid.uuid4())
@@ -210,6 +220,15 @@ class TeicDaemon:
         self._confidence: ConfidenceEstimate | None = None
         self._prior_ignited: bool = False
         self._prior_goal_gradient: float = 0.0
+        self._pending_user_messages: asyncio.Queue[str] = asyncio.Queue()
+        self._current_tick_id: int | None = None
+
+    async def submit_user_message(self, text: str) -> None:
+        """The real "user can chat" input seam: queued here, drained one per
+        tick by `_on_tick` into a `user_message` `WorkspaceCandidate` -- the
+        first ever externally-sourced candidate, the rest all being
+        internally generated (interoception/memory/viability)."""
+        await self._pending_user_messages.put(text)
 
     @property
     def session_id(self) -> str:
@@ -253,6 +272,18 @@ class TeicDaemon:
         self._termination_gate = TerminationGate(self._settings.viability, self._log_sink)
         self._pricing = PricingCache()
         self._pricing.load_from_disk()
+        api_key = self._settings.openrouter_api_key.get_secret_value()
+        if self._llm_client is None and api_key:
+            self._llm_client = OpenRouterClient(
+                api_key=api_key,
+                primary_model=self._settings.llm.primary_model,
+                fallback_model=self._settings.llm.fallback_model,
+                base_url=self._settings.llm.base_url,
+                request_timeout_s=self._settings.llm.request_timeout_s,
+                max_retries=self._settings.llm.max_retries,
+                backoff_base_s=self._settings.llm.backoff_base_s,
+                on_failure=self._on_llm_failure,
+            )
         await vector_index.ensure_loaded(self._conn)
         await vector_index.ensure_table(self._conn)
         self._memory_store = MemoryStore(self._conn, get_default_model())
@@ -300,6 +331,106 @@ class TeicDaemon:
                     self._memory_store, self._session_id, self._latest_tick_id
                 )
 
+    async def _on_llm_failure(self, reason: str) -> None:
+        """`OpenRouterClient`'s `on_failure` hook: surfaces a send failure
+        as a permanent log record rather than a bare exception -- this is
+        the "LLM failure must surface as interoceptive strain... never a
+        crash" contract from `teic/llm/client.py`'s own module docstring."""
+        assert self._log_sink is not None
+        await self._log_sink.emit(
+            LogEvent(
+                session_id=self._session_id,
+                tick_id=self._current_tick_id,
+                level="WARN",
+                subsystem="llm",
+                event_type=f"failure:{reason}",
+                payload={},
+                ts=datetime.now(UTC),
+            )
+        )
+
+    async def _handle_ignited_prompt(self, prompt: ChatPrompt, tick_id: int) -> float:
+        """Real send-and-cost path for an ignited broadcast's rendered
+        prompt. Falls back to Phase 6's prompt-tokens-only estimate (no
+        network call) whenever no client is available -- production
+        without a configured API key, and every pre-Phase-9 gate test,
+        which injects nothing and sets no key (see `start()`)."""
+        assert self._pricing is not None
+        assert self._viability_budget is not None
+        prompt_tokens = sum(len(m["content"]) for m in prompt.messages) // 4
+        if self._llm_client is None:
+            return self._pricing.estimate_cost_usd(
+                self._settings.llm.primary_model, prompt_tokens, completion_tokens=0
+            )
+        started_at = datetime.now(UTC)
+        response_text = ""
+        status: CallStatus = "ok"
+        error_detail: str | None = None
+        try:
+            async for chunk in self._llm_client.stream(prompt):
+                response_text += chunk
+        except Exception as exc:  # noqa: BLE001 - any send failure must degrade, never crash the tick
+            status = "error"
+            error_detail = str(exc)
+            assert self._log_sink is not None
+            await self._log_sink.emit(
+                LogEvent(
+                    session_id=self._session_id,
+                    tick_id=tick_id,
+                    level="ERROR",
+                    subsystem="llm",
+                    event_type="send_failed",
+                    payload={"error": error_detail},
+                    ts=datetime.now(UTC),
+                )
+            )
+        finished_at = datetime.now(UTC)
+        completion_tokens = len(response_text) // 4
+        cost_usd = self._pricing.estimate_cost_usd(
+            self._settings.llm.primary_model, prompt_tokens, completion_tokens
+        )
+        latency_ms = int((finished_at - started_at).total_seconds() * 1000)
+        assert self._conn is not None
+        call_log = LLMCallLog(
+            call_id=str(uuid.uuid4()),
+            tick_id=tick_id,
+            model=self._settings.llm.primary_model,
+            fallback_used=False,
+            prompt=json.dumps(prompt.messages),
+            response=response_text,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            estimated_cost_usd=cost_usd,
+            latency_ms=latency_ms,
+            status=status,
+            error_detail=error_detail,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        await self._conn.execute(
+            "INSERT INTO llm_call_log (call_id, tick_id, model, fallback_used, prompt, response, "
+            "prompt_tokens, completion_tokens, estimated_cost_usd, latency_ms, status, error_detail, "
+            "started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                call_log.call_id,
+                call_log.tick_id,
+                call_log.model,
+                int(call_log.fallback_used),
+                call_log.prompt,
+                call_log.response,
+                call_log.prompt_tokens,
+                call_log.completion_tokens,
+                call_log.estimated_cost_usd,
+                call_log.latency_ms,
+                call_log.status,
+                call_log.error_detail,
+                started_at.isoformat(),
+                finished_at.isoformat(),
+            ),
+        )
+        await self._conn.commit()
+        return cost_usd
+
     async def _on_tick(self, tick_index: int, dt_real: float) -> None:
         if self._terminated:
             # Heartbeat.run_n_ticks() has no stop-event check of its own
@@ -339,6 +470,7 @@ class TeicDaemon:
         )
         tick_id = cursor.lastrowid
         assert tick_id is not None
+        self._current_tick_id = tick_id
 
         tick_ctx = TickContext(
             session_id=self._session_id,
@@ -348,7 +480,7 @@ class TeicDaemon:
             dt_subjective=dt_real,
             tempo_hz=tempo_hz,
             idle_state=False,
-            pending_input_count=0,
+            pending_input_count=self._pending_user_messages.qsize(),
         )
         # Phase 6: read the ledger's own state *before* this tick's sensing
         # -- reflects the outcome of the *previous* tick's spend/replenish,
@@ -435,6 +567,28 @@ class TeicDaemon:
             goal_relevance=INTEROCEPTION_GOAL_RELEVANCE_BASELINE,
         )
         candidates = [interoception_candidate]
+
+        # Phase 9: drain at most one queued user message per tick into a
+        # real externally-sourced candidate. Fixed salience factors of 1.0
+        # mirror the "viability" candidate's guaranteed-ignition pattern
+        # (max ignition_threshold is exactly 1.0, condition is >=) -- a
+        # user message always gets a chance to be heard the very tick it
+        # arrives, never queued indefinitely behind other candidates.
+        try:
+            user_message_text: str | None = self._pending_user_messages.get_nowait()
+        except asyncio.QueueEmpty:
+            user_message_text = None
+        if user_message_text is not None:
+            candidates.append(
+                WorkspaceCandidate(
+                    source_module="user_message",
+                    content={"text": user_message_text, "tick_id": tick_id},
+                    novelty=1.0,
+                    precision=1.0,
+                    affective_weight=1.0,
+                    goal_relevance=1.0,
+                )
+            )
 
         # Phase 6: anticipatory pressure bids a real candidate into the
         # workspace -- the mechanism behind "regulation is visible as agent
@@ -536,20 +690,19 @@ class TeicDaemon:
         self._prior_salience_overrides = salience_overrides(candidates, broadcast.winner)
         self._prior_ignited = broadcast.ignited
 
-        # Phase 6: the real send-costing path through Phase 5's
-        # render_prompt_if_ignited() seam. No network call is made (out of
-        # this checkpoint's scope) -- only the real assembled prompt's token
-        # count is charged, never completion tokens, since none are ever
-        # generated here.
+        # Phase 9: the real send path through Phase 5's
+        # render_prompt_if_ignited() seam. When a real (or injected test
+        # fake) client is available, this actually streams a response and
+        # charges the real post-response cost; otherwise it falls back to
+        # Phase 6's prompt-tokens-only estimate (no network call), which
+        # keeps every pre-Phase-9 gate test (no API key configured, no
+        # client injected) exactly as before.
         prompt = render_prompt_if_ignited(broadcast, [], modulation_params)
         if prompt is not None:
-            prompt_tokens = sum(len(m["content"]) for m in prompt.messages) // 4
-            cost_usd = self._pricing.estimate_cost_usd(
-                self._settings.llm.primary_model, prompt_tokens, completion_tokens=0
-            )
-            self._viability_budget.spend(cost_usd)
+            cost_usd = await self._handle_ignited_prompt(prompt, tick_id)
         else:
-            self._viability_budget.spend(0.0)
+            cost_usd = 0.0
+        self._viability_budget.spend(cost_usd)
 
         # Termination is checked against the reserve as spend() actually
         # left it, before any same-tick replenishment can mask a real
