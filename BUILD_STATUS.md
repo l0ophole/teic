@@ -11,15 +11,16 @@
 | 6 — Viability, allostasis | **Complete** | `docs/plans/phase6-notes.md` |
 | 7 — Self-model, metacognition | **Complete** | `docs/plans/phase7-notes.md` |
 | 8 — Assessment harness + falsifiers | **Complete** | `docs/plans/phase8-notes.md` |
-| 9 — UI (terminal + web) | Not started | |
+| 9 — UI (terminal + web) | In progress (cp1 done) | `docs/plans/phase9-plan.md` |
 
 ## Current state / next step
 
-Phase 8 complete: `experiments.py` (ablation battery + 5 additional
-experiments) and `runner.py` (falsifiers-first gating, research-flag
-gating, CLI) close out the assessment harness. See
-`docs/plans/phase8-notes.md`. Next: Phase 9 — UI (terminal + web), not
-yet started; no plan file exists yet for it.
+Phase 9 cp1 complete: `daemon.py` now drains a queued user message into a
+real `WorkspaceCandidate` each tick and, on an ignited winner, actually
+calls `ChatClient.stream()` (real post-response cost + `llm_call_log`
+persistence) instead of the old prompt-tokens-only estimate; `textual`
+added as a dependency. Next: Phase 9 cp2 — terminal TUI core (chat,
+status panel, controls) per `docs/plans/phase9-plan.md`.
 
 ## How to verify the build so far
 
