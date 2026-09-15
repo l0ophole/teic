@@ -10,7 +10,7 @@
 | 5 — Workspace arbiter, ignition | **Complete** | `docs/plans/phase5-notes.md` |
 | 6 — Viability, allostasis | **Complete** | `docs/plans/phase6-notes.md` |
 | 7 — Self-model, metacognition | **Complete** | `docs/plans/phase7-notes.md` |
-| 8 — Assessment harness + falsifiers | Not started | |
+| 8 — Assessment harness + falsifiers | In progress (cp1 done) | |
 | 9 — UI (terminal + web) | Not started | |
 
 ## Current state / next step
@@ -22,7 +22,10 @@ into modulation/sensing. Causal-efficacy gate test proves editing a
 self-model field predictably changes downstream behavior. See
 `docs/plans/phase7-notes.md`.
 
-Next: Phase 8 — assessment harness + falsifiers, per `docs/plans/phase8-plan.md`.
+Phase 8 cp1 done: `teic/harness/thresholds.py` (loader), `report.py`
+(`AssessmentReport`, L0-L4 verdict, honest-framing note), `falsifiers.py`
+(F1-F7, pass/fail discriminated by tests, no live LLM). 165 tests, mypy
+clean. Next: Phase 8 cp2 — Tier A/B probes, per `docs/plans/phase8-plan.md`.
 
 ## How to verify the build so far
 
