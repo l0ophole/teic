@@ -22,6 +22,13 @@ and an on-demand B1–B4 probe panel (gates B2 on `research.enabled`, same
 as `runner.py`). All Phase 9 checkpoints verified and committed. No
 further phase queued — see `docs/PlanBuildTEIC.md` for any v2 scope.
 
+Post-phase-9 fix (commit `04a1097`): TUI hung at "waiting for first
+tick..." and crashed on quit with `ValueError: bad value(s) in
+fds_to_keep`. Root cause + fix in `teic/memory/embeddings.py`'s
+`_get_model()` docstring/comments. Full pytest+mypy batch verified only
+partially this session (system OOM-killed the full run 3x; mypy clean +
+`tests/test_memory/` 19/19 passed) — rerun the full batch next session.
+
 ## How to verify the build so far
 
 ```
