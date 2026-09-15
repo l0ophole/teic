@@ -10,23 +10,16 @@
 | 5 — Workspace arbiter, ignition | **Complete** | `docs/plans/phase5-notes.md` |
 | 6 — Viability, allostasis | **Complete** | `docs/plans/phase6-notes.md` |
 | 7 — Self-model, metacognition | **Complete** | `docs/plans/phase7-notes.md` |
-| 8 — Assessment harness + falsifiers | In progress (cp2 done) | |
+| 8 — Assessment harness + falsifiers | **Complete** | `docs/plans/phase8-notes.md` |
 | 9 — UI (terminal + web) | Not started | |
 
 ## Current state / next step
 
-Phase 7 complete: `daemon.py` now builds a real `SelfModel`/
-`ConfidenceEstimate` each tick (persisted to the new `self_model` table)
-and threads `confidence`/`prior_ignited`/`goal_gradient` one-tick-lagged
-into modulation/sensing. Causal-efficacy gate test proves editing a
-self-model field predictably changes downstream behavior. See
-`docs/plans/phase7-notes.md`.
-
-Phase 8 cp2 done: `probes/structural.py` (A1-A5), `probes/behavioral.py`
-(B1-B8), `perturbation.py` (bounded, gate-then-log negative-valence),
-`control.py` (transcript-only weak-evidence flagging). 204 tests, mypy
-clean. Next: Phase 8 cp3 — experiments battery, runner, docs, per
-`docs/plans/phase8-plan.md`.
+Phase 8 complete: `experiments.py` (ablation battery + 5 additional
+experiments) and `runner.py` (falsifiers-first gating, research-flag
+gating, CLI) close out the assessment harness. See
+`docs/plans/phase8-notes.md`. Next: Phase 9 — UI (terminal + web), not
+yet started; no plan file exists yet for it.
 
 ## How to verify the build so far
 
@@ -68,3 +61,8 @@ python -m teic         # Ctrl+C; check data/teic.db: tick, register_sample,
   modulation/sensing; one `self_model` row persisted per tick; causal-
   efficacy gate test proves a direct self-model edit predictably changes
   downstream behavior.
+- Phase 8: F1-F7 falsifiers (abort-gated) + A1-A5/B1-B8 Tier A/B probes +
+  bounded gate-then-log perturbation + transcript-only control +
+  ablation/empty-clock/ignition/cost-bearing/contingency/persona
+  experiments, combined by `runner.py` into one `AssessmentReport`;
+  grading deliberately capped at L1/L2, no auto L3/L4.

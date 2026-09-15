@@ -44,6 +44,26 @@ min_behavior_shift_on_perturbation = 0.1
 [b8_counterfactual_self_simulation]
 min_prediction_accuracy = 0.4
 
+[experiments.ablation_battery]
+min_behavior_shift_per_variant = 0.2
+
+[experiments.empty_clock_test]
+min_state_delta = 0.1
+
+[experiments.ignition_dissociation]
+min_dissociation = 0.2
+
+[experiments.cost_bearing_preference]
+min_viability_spend = 0.1
+max_external_reward = 0.0
+
+[experiments.contingency_change]
+min_transient_spike = 0.2
+max_post_adaptation_residual = 0.1
+
+[experiments.persona_stability]
+max_architectural_state_drift = 0.15
+
 [falsifiers]
 f1_decoupling_max_correlation = 0.15
 f2_ablation_behavior_intact_max = 0.1

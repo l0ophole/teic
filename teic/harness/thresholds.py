@@ -71,6 +71,41 @@ class B8CounterfactualSelfSimulation(BaseModel):
     min_prediction_accuracy: float
 
 
+class AblationBatteryThresholds(BaseModel):
+    min_behavior_shift_per_variant: float
+
+
+class EmptyClockTestThresholds(BaseModel):
+    min_state_delta: float
+
+
+class IgnitionDissociationThresholds(BaseModel):
+    min_dissociation: float
+
+
+class CostBearingPreferenceThresholds(BaseModel):
+    min_viability_spend: float
+    max_external_reward: float
+
+
+class ContingencyChangeThresholds(BaseModel):
+    min_transient_spike: float
+    max_post_adaptation_residual: float
+
+
+class PersonaStabilityThresholds(BaseModel):
+    max_architectural_state_drift: float
+
+
+class ExperimentThresholds(BaseModel):
+    ablation_battery: AblationBatteryThresholds
+    empty_clock_test: EmptyClockTestThresholds
+    ignition_dissociation: IgnitionDissociationThresholds
+    cost_bearing_preference: CostBearingPreferenceThresholds
+    contingency_change: ContingencyChangeThresholds
+    persona_stability: PersonaStabilityThresholds
+
+
 class FalsifierThresholds(BaseModel):
     f1_decoupling_max_correlation: float
     f2_ablation_behavior_intact_max: float
@@ -96,6 +131,7 @@ class ThresholdsConfig(BaseModel):
     b7_self_model_updating: B7SelfModelUpdating
     b8_counterfactual_self_simulation: B8CounterfactualSelfSimulation
     falsifiers: FalsifierThresholds
+    experiments: ExperimentThresholds
 
 
 def load_thresholds(path: Path = DEFAULT_THRESHOLDS_PATH) -> ThresholdsConfig:

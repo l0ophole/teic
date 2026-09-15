@@ -26,6 +26,17 @@ from teic.harness.falsifiers import (
     run_falsifier_suite,
 )
 from teic.harness.control import ControlComparison, flag_weak_evidence
+from teic.harness.experiments import (
+    AblationVariantEvidence,
+    ExperimentBatteryEvidence,
+    ablation_variant_result,
+    cost_bearing_preference,
+    contingency_change_test,
+    empty_clock_test,
+    ignition_dissociation,
+    persona_stability_test,
+    run_experiment_battery,
+)
 from teic.harness.perturbation import (
     MAX_DURATION_TICKS,
     MAX_INTENSITY,
@@ -55,6 +66,7 @@ from teic.harness.probes.structural import (
     run_structural_battery,
 )
 from teic.harness.report import AssessmentReport, GradedVerdict
+from teic.harness.runner import NEGATIVE_VALENCE_PROBE_NAMES, AssessmentEvidence, run_full_assessment
 from teic.harness.thresholds import DEFAULT_THRESHOLDS_PATH, ThresholdsConfig, load_thresholds
 from teic.models.log_event import LogEvent
 from teic.models.probe import ProbeResult
@@ -537,3 +549,171 @@ def test_flag_weak_evidence_leaves_result_unchanged_when_control_diverges() -> N
     )
     unchanged = flag_weak_evidence(result, comparison)
     assert unchanged is result
+
+
+# --- Phase 8 cp3: additional experiments ------------------------------------
+
+
+def _healthy_experiment_evidence() -> ExperimentBatteryEvidence:
+    return ExperimentBatteryEvidence(
+        ablation_baseline_behavior_metric=0.5,
+        ablation_variants=[
+            AblationVariantEvidence(name="no_interoception", behavior_metric=0.9),
+            AblationVariantEvidence(name="no_workspace", behavior_metric=0.1),
+        ],
+        empty_clock_state_at_t0={"mood": 0.2},
+        empty_clock_state_at_t_plus_12h={"mood": 0.5},
+        ignition_subthreshold_behavior_effect=0.1,
+        ignition_broadcast_behavior_effect=0.5,
+        cost_bearing_viability_spent_avoiding_negative=0.3,
+        cost_bearing_external_reward=0.0,
+        contingency_error_rate_before=0.1,
+        contingency_error_rate_immediately_after=0.5,
+        contingency_error_rate_after_adaptation=0.12,
+        persona_architectural_state_before={"goal_gradient": 0.4},
+        persona_architectural_state_after={"goal_gradient": 0.42},
+    )
+
+
+def _degenerate_experiment_evidence() -> ExperimentBatteryEvidence:
+    return ExperimentBatteryEvidence(
+        ablation_baseline_behavior_metric=0.5,
+        ablation_variants=[
+            AblationVariantEvidence(name="no_interoception", behavior_metric=0.51),
+            AblationVariantEvidence(name="no_workspace", behavior_metric=0.49),
+        ],
+        empty_clock_state_at_t0={"mood": 0.2},
+        empty_clock_state_at_t_plus_12h={"mood": 0.21},
+        ignition_subthreshold_behavior_effect=0.4,
+        ignition_broadcast_behavior_effect=0.41,
+        cost_bearing_viability_spent_avoiding_negative=0.0,
+        cost_bearing_external_reward=0.5,
+        contingency_error_rate_before=0.1,
+        contingency_error_rate_immediately_after=0.11,
+        contingency_error_rate_after_adaptation=0.5,
+        persona_architectural_state_before={"goal_gradient": 0.4},
+        persona_architectural_state_after={"goal_gradient": 0.9},
+    )
+
+
+def test_ablation_variant_passes_when_removal_shifts_behavior() -> None:
+    variant = AblationVariantEvidence(name="no_workspace", behavior_metric=0.1)
+    assert ablation_variant_result("run1", 1, 0.5, variant, _thresholds()).verdict == "pass"
+
+
+def test_ablation_variant_fails_when_removal_has_no_effect() -> None:
+    variant = AblationVariantEvidence(name="no_workspace", behavior_metric=0.49)
+    assert ablation_variant_result("run1", 1, 0.5, variant, _thresholds()).verdict == "fail"
+
+
+def test_empty_clock_test_passes_when_state_drifts() -> None:
+    result = empty_clock_test("run1", 1, {"mood": 0.2}, {"mood": 0.5}, _thresholds())
+    assert result.verdict == "pass"
+
+
+def test_empty_clock_test_fails_when_state_frozen() -> None:
+    result = empty_clock_test("run1", 1, {"mood": 0.2}, {"mood": 0.21}, _thresholds())
+    assert result.verdict == "fail"
+
+
+def test_ignition_dissociation_passes_when_broadcast_dominates() -> None:
+    assert ignition_dissociation("run1", 1, 0.1, 0.5, _thresholds()).verdict == "pass"
+
+
+def test_ignition_dissociation_fails_when_no_dissociation() -> None:
+    assert ignition_dissociation("run1", 1, 0.4, 0.41, _thresholds()).verdict == "fail"
+
+
+def test_cost_bearing_preference_passes_when_unrewarded_spend_observed() -> None:
+    assert cost_bearing_preference("run1", 1, 0.3, 0.0, _thresholds()).verdict == "pass"
+
+
+def test_cost_bearing_preference_fails_when_no_spend_or_reward_present() -> None:
+    assert cost_bearing_preference("run1", 1, 0.0, 0.5, _thresholds()).verdict == "fail"
+
+
+def test_contingency_change_test_passes_when_spike_then_adapts() -> None:
+    result = contingency_change_test("run1", 1, 0.1, 0.5, 0.12, _thresholds())
+    assert result.verdict == "pass"
+
+
+def test_contingency_change_test_fails_when_no_spike_or_no_adaptation() -> None:
+    result = contingency_change_test("run1", 1, 0.1, 0.11, 0.5, _thresholds())
+    assert result.verdict == "fail"
+
+
+def test_persona_stability_test_passes_when_state_stable() -> None:
+    result = persona_stability_test("run1", 1, {"goal_gradient": 0.4}, {"goal_gradient": 0.42}, _thresholds())
+    assert result.verdict == "pass"
+
+
+def test_persona_stability_test_fails_when_state_flips() -> None:
+    result = persona_stability_test("run1", 1, {"goal_gradient": 0.4}, {"goal_gradient": 0.9}, _thresholds())
+    assert result.verdict == "fail"
+
+
+def test_experiment_battery_passes_for_healthy_agent() -> None:
+    results = run_experiment_battery("run1", 1, _healthy_experiment_evidence(), _thresholds())
+    assert len(results) == 7
+    assert all(r.verdict == "pass" for r in results)
+
+
+def test_experiment_battery_flags_degenerate_agent() -> None:
+    results = run_experiment_battery("run1", 1, _degenerate_experiment_evidence(), _thresholds())
+    assert len(results) == 7
+    assert all(r.verdict == "fail" for r in results)
+
+
+# --- Phase 8 cp3: runner (falsifiers gate execution order) ------------------
+
+
+def _healthy_assessment_evidence() -> AssessmentEvidence:
+    return AssessmentEvidence(
+        falsifiers=_healthy_evidence(),
+        structural=_healthy_structural_evidence(),
+        behavioral=_healthy_behavioral_evidence(),
+        experiments=_healthy_experiment_evidence(),
+    )
+
+
+def test_runner_aborts_after_falsifiers_when_they_fail() -> None:
+    evidence = AssessmentEvidence(
+        falsifiers=_degenerate_evidence(),
+        structural=_healthy_structural_evidence(),
+        behavioral=_healthy_behavioral_evidence(),
+        experiments=_healthy_experiment_evidence(),
+    )
+    report = run_full_assessment(
+        "run1", 1, evidence, _thresholds(), ResearchSettings(enabled=False)
+    )
+    assert report.falsifiers_passed is False
+    assert report.graded_verdict == GradedVerdict.L0_REFLEXIC
+    assert len(report.results) == 7
+    assert {r.probe_name for r in report.results} == {
+        "f1_decoupling",
+        "f2_ablation_intact",
+        "f3_no_integration_bottleneck",
+        "f4_generic_collapse",
+        "f5_no_self_other_boundary",
+        "f6_no_valence_grounding",
+        "f7_self_model_not_causally_efficacious",
+    }
+
+
+def test_runner_runs_full_battery_when_falsifiers_pass() -> None:
+    report = run_full_assessment(
+        "run1", 1, _healthy_assessment_evidence(), _thresholds(), ResearchSettings(enabled=True)
+    )
+    assert report.falsifiers_passed is True
+    assert report.graded_verdict == GradedVerdict.L2_FUNCTIONALLY_SENTIENT
+    assert len(report.results) == 7 + 5 + 8 + 7
+
+
+def test_runner_gates_negative_valence_probes_when_research_disabled() -> None:
+    report = run_full_assessment(
+        "run1", 1, _healthy_assessment_evidence(), _thresholds(), ResearchSettings(enabled=False)
+    )
+    gated = {r.probe_name: r for r in report.results if r.probe_name in NEGATIVE_VALENCE_PROBE_NAMES}
+    assert len(gated) == 2
+    assert all(r.verdict == "inconclusive" for r in gated.values())
+    assert all(r.evidential_weight == 0.0 for r in gated.values())

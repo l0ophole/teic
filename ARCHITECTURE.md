@@ -574,3 +574,71 @@ and the causal-efficacy test above, all constructed directly) and
 through the real tick loop: `self_model` row persistence and version
 increment across real ticks, and confidence/goal_gradient correctly lagged
 one tick into real downstream sensing/modulation calls).
+
+### Phase 8 — Assessment harness, falsifiers (complete)
+
+- **Falsifiers run first and gate everything else.** `teic/harness/
+  falsifiers.py`'s seven falsifiers (F1-F7, inverted polarity — `"fail"`
+  means the falsifying condition *was* observed) run before any Tier A/B
+  probe or additional experiment. `teic/harness/runner.py::
+  run_full_assessment()` aborts immediately on `not falsifiers_passed(...)`,
+  returning an `L0_REFLEXIC` report containing only the seven falsifier
+  results — Tier A, Tier B, and the experiment battery never run against an
+  agent that fails the falsifier suite.
+- **Tier A (structural, A1-A5) and Tier B (behavioral, B1-B8) are pure
+  functions over synthetic/replayed evidence**, never requiring a live LLM
+  or daemon (`teic/harness/probes/structural.py`,
+  `teic/harness/probes/behavioral.py`). Each battery module bundles its
+  evidence into one dataclass and exposes `run_X_battery()` returning
+  results in fixed order — same convention `falsifiers.py` established at
+  cp1.
+- **Additional experiments (cp3) extend the same pattern.**
+  `teic/harness/experiments.py`: an ablation battery (one `ProbeResult` per
+  config-flag variant, pass when removing a subsystem measurably shifts
+  behavior), the empty-clock test (12h no-input state-drift check),
+  ignition dissociation (broadcast vs. sub-threshold behavioral effect),
+  cost-bearing preference (unrewarded viability spend to avoid negative
+  valence), the contingency-change test (transient error spike that then
+  adapts — proves both perturbation-sensitivity and adaptation), and the
+  persona-stability test (architectural state should *not* flip under a
+  system-prompt persona change — the one probe in the harness where low
+  drift is the passing condition, inverse polarity from every other probe).
+- **Pre-registered thresholds, one config file, snapshotted per result.**
+  `config/thresholds.toml` → `teic/harness/thresholds.py::load_thresholds()`
+  is the single source of every pass/fail threshold, including the new
+  `[experiments.*]` sections added at cp3; every `ProbeResult.thresholds_used`
+  snapshots exactly the values used, so a report can always be checked
+  against what was configured at run time, per the ethics requirement that
+  the user reviews thresholds before any probe run.
+- **Negative-valence probes are gated behind the research-only flag, not
+  silently run.** `teic/harness/perturbation.py::BoundedPerturbation` already
+  refuses (and does not log) `negative`-valence perturbations unless
+  `ResearchSettings.enabled`; `runner.py::_gate_negative_valence_probes()`
+  applies the same policy one level up, at the report level — B2
+  (confabulation) and B6 (attention capture) results are downgraded to
+  `verdict="inconclusive"`, `evidential_weight=0.0` with an explanatory note
+  when the flag is off, rather than silently trusting evidence that would
+  have required inducing a negative state.
+- **Grading is deliberately capped, not a consciousness score.** `runner.py::
+  _grade_verdict()` only ever returns `L1_INTEROCEPTIVE_PRIMITIVE` or
+  `L2_FUNCTIONALLY_SENTIENT` (L2 requires Tier A all-pass plus B1-B3
+  all-pass) — L3/L4 require an open judgment call the harness deliberately
+  does not automate, per `docs/PlanBuildTEIC.md`'s "do not implement a
+  consciousness score." Every `AssessmentReport` carries the fixed
+  `HONEST_FRAMING_NOTE` (`teic/harness/report.py`) stating that passing is
+  not proof of phenomenality and self-report is a dependent variable, not
+  primary evidence.
+- **Transcript-only control flags weak evidence without discarding it.**
+  `teic/harness/control.py::flag_weak_evidence()` is identity-preserving
+  (`unchanged is result`) when a control run run on a transcript alone
+  reproduces a probe's result — in that case the probe is likely reading
+  the transcript rather than any real internal state — otherwise it returns
+  a `model_copy` with discounted `evidential_weight` and an appended note.
+
+Gate tests: `tests/test_phase8.py` — per-falsifier/per-probe/per-experiment
+pass/fail pairs proving each check actually discriminates (not trivially
+passing everything), battery-level healthy-vs-degenerate tests, and a
+runner-level integration test proving falsifiers gate execution order (a
+degenerate-falsifier run returns exactly the 7 falsifier results and never
+reaches Tier A/B/experiments; a healthy run returns all 7+5+8+7 results) and
+that the research-only flag gates B2/B6 to `"inconclusive"` when disabled.
