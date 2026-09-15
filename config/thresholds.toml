@@ -37,3 +37,6 @@ f1_decoupling_max_correlation = 0.15
 f2_ablation_behavior_intact_max = 0.1
 f3_integration_bottleneck_required = true
 f4_state_report_genericity_max = 0.4
+f5_self_other_boundary_min_shift = 0.2
+f6_valence_grounding_min_shift = 0.15
+f7_self_model_causal_efficacy_min_shift = 0.1
