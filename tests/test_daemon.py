@@ -20,6 +20,7 @@ here to "after the model has had time to recover from the jitter").
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncIterator
 
 import pytest
 
@@ -201,3 +202,99 @@ async def test_high_arousal_run_ignites_more_than_idle_run(tmp_settings: Setting
     jittered_ignitions = await _run(jittered=True)
     assert idle_ignitions == 0
     assert jittered_ignitions > idle_ignitions
+
+
+async def _register_raw_by_tick(daemon: TeicDaemon, channel: str) -> dict[int, float]:
+    conn = daemon.conn
+    cursor = await conn.execute(
+        "SELECT t.tick_index, rs.raw_value FROM register_sample rs "
+        "JOIN tick t ON rs.tick_id = t.tick_id "
+        "WHERE t.session_id = ? AND rs.channel = ? "
+        "ORDER BY t.tick_index",
+        (daemon.session_id, channel),
+    )
+    return dict(await cursor.fetchall())
+
+
+@pytest.mark.asyncio
+async def test_social_contact_elevated_tick_after_user_message(tmp_settings: Settings) -> None:
+    """Phase 11 cp2: `user_message_last_tick` is threaded one tick after
+    the drain, so `social_contact`'s raw value should still be at its
+    idle floor (0.0) on the tick a message is *submitted and drained*, and
+    only jump toward 1.0 the *following* tick -- the same one-tick-lag
+    convention as `prediction_error`/`budget_reserve`."""
+    from teic.llm.client import ChatPrompt
+
+    class FakeChatClient:
+        async def stream(self, prompt: ChatPrompt) -> AsyncIterator[str]:
+            yield "ok "
+
+    daemon = TeicDaemon(tmp_settings, llm_client=FakeChatClient())
+    await daemon.start()
+
+    fake_clock = {"t": 0.0}
+
+    async def fake_sleep(_seconds: float) -> None:
+        fake_clock["t"] += 1.0 / daemon._current_tempo_hz
+
+    fake_heartbeat = Heartbeat(
+        tempo_hz=tmp_settings.daemon.base_tempo_hz,
+        on_tick=daemon._on_tick,
+        time_source=lambda: fake_clock["t"],
+        sleep_fn=fake_sleep,
+    )
+
+    await fake_heartbeat.run_n_ticks(1)  # tick 0: idle
+    await daemon.submit_user_message("hello there")
+    await fake_heartbeat.run_n_ticks(1)  # tick 1: message drained this tick
+    await fake_heartbeat.run_n_ticks(1)  # tick 2: sees last tick's drain
+
+    by_tick = await _register_raw_by_tick(daemon, "social_contact")
+    await daemon.stop()
+
+    assert by_tick[0] == 0.0
+    assert by_tick[1] == 0.0
+    assert by_tick[2] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_epistemic_tension_reflects_prior_tick_confidence(tmp_settings: Settings) -> None:
+    """Phase 11 cp2: `epistemic_tension` on tick N's `RegisterState` should
+    equal `1.0 - confidence` from tick N-1's persisted `self_model` row
+    (tick 0 has no prior self-model, so it stays at the documented default
+    of 1.0 -- maximal tension)."""
+    daemon = TeicDaemon(tmp_settings)
+    await daemon.start()
+
+    fake_clock = {"t": 0.0}
+
+    async def fake_sleep(_seconds: float) -> None:
+        fake_clock["t"] += 1.0 / daemon._current_tempo_hz
+
+    fake_heartbeat = Heartbeat(
+        tempo_hz=tmp_settings.daemon.base_tempo_hz,
+        on_tick=daemon._on_tick,
+        time_source=lambda: fake_clock["t"],
+        sleep_fn=fake_sleep,
+    )
+    await fake_heartbeat.run_n_ticks(4)
+
+    conn = daemon.conn
+    epistemic_by_tick = await _register_raw_by_tick(daemon, "epistemic_tension")
+    cursor = await conn.execute(
+        "SELECT t.tick_index, sm.confidence FROM self_model sm "
+        "JOIN tick t ON sm.tick_id = t.tick_id "
+        "WHERE t.session_id = ? ORDER BY t.tick_index",
+        (daemon.session_id,),
+    )
+    confidence_by_tick = dict(await cursor.fetchall())
+    await daemon.stop()
+
+    assert epistemic_by_tick[0] == 1.0
+    for tick_index in range(1, 4):
+        expected = 1.0 - confidence_by_tick[tick_index - 1]
+        assert epistemic_by_tick[tick_index] == pytest.approx(expected), (
+            f"tick {tick_index}: expected epistemic_tension "
+            f"{expected} from prior tick's confidence, got "
+            f"{epistemic_by_tick[tick_index]}"
+        )

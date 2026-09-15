@@ -12,22 +12,29 @@
 | 7 — Self-model, metacognition | **Complete** | `docs/plans/phase7-notes.md` |
 | 8 — Assessment harness + falsifiers | **Complete** | `docs/plans/phase8-notes.md` |
 | 9 — UI (terminal + web) | **Complete** | `docs/plans/phase9-notes.md` |
-| 10 — Narrative constructor | **In progress (cp1 done)** | `docs/plans/phase10-notes.md` |
+| 10 — Narrative constructor | **Complete** | `docs/plans/phase10-notes.md` |
 
 ## Current state / next step
 
-Phase 10 cp2 done: `daemon.py:760`'s hardcoded `[]` replaced with a real
-`build_narrative_tail()` call (queried before the current tick's own
-`workspace_broadcast` insert, so the monologue never echoes the live
-turn back into its own prompt — see phase10-notes.md cp2). Found (not
-caused by this change — reproduced on unmodified `main`) a pre-existing
-hang in `tests/test_daemon.py::test_high_arousal_run_ignites_more_than_idle_run`,
-same class as the `04a1097` TUI hang; deselected for verification, not
-fixed here. Verified via `tests/test_workspace/`,
-`tests/test_llm/test_prompt_assembly.py`, `tests/test_daemon.py` (minus
-the hang) + mypy, not the full `pytest -q` batch (still slow in this
-environment — deferred, per cp1's note, to a later checkpoint). Resume
-with "Continue Phase 10 at cp3".
+Phase 11 cp2 done: `daemon.py` threads real `epistemic_tension`
+(`1.0 - self._confidence.confidence`, one-tick-lagged) and
+`user_message_last_tick` (`self._prior_user_message_present`, set after
+the drain block) into `ChannelPipeline.process()` each tick. New targeted
+tests in `tests/test_daemon.py` (`test_social_contact_elevated_tick_after_user_message`,
+`test_epistemic_tension_reflects_prior_tick_confidence`) green, mypy
+clean. Next: cp3, `ARCHITECTURE.md` + gate test + full batched verify
+(see `docs/plans/phase11-plan.md`).
+
+Phase 10 complete. cp3 added `tests/test_gates/test_phase10.py`: drives a
+real `TeicDaemon` through two ignited user turns and asserts the actual
+second `ChatPrompt` sent to `FakeChatClient.stream()` narrates the first
+turn ("Recent inner monologue" section, `you:`/`I:` lines), while the
+first turn's own prompt has none — see phase10-notes.md cp3. ARCHITECTURE.md
+Phase 10 section added. `tests/test_daemon.py::test_high_arousal_run_ignites_more_than_idle_run`
+remains a known pre-existing hang (same class as the `04a1097` TUI hang,
+reproduces on unmodified `main`, not caused by Phase 10) — still
+deselected for verification. Full `pytest -q` (minus that one hanging
+test) + mypy batch clean; committed.
 
 Post-phase-9 fix (commit `04a1097`): TUI hung at "waiting for first
 tick..." and crashed on quit with `ValueError: bad value(s) in

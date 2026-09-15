@@ -245,6 +245,7 @@ class TeicDaemon:
         self._confidence: ConfidenceEstimate | None = None
         self._prior_ignited: bool = False
         self._prior_goal_gradient: float = 0.0
+        self._prior_user_message_present: bool = False
         self._pending_user_messages: asyncio.Queue[str] = asyncio.Queue()
         self._current_tick_id: int | None = None
         # Phase 9 cp2: TUI observer seams.
@@ -557,6 +558,10 @@ class TeicDaemon:
             budget_reserve=budget_reserve,
             burn_rate=burn_rate,
             goal_gradient=self._prior_goal_gradient,
+            epistemic_tension=(1.0 - self._confidence.confidence)
+            if self._confidence is not None
+            else 1.0,
+            user_message_last_tick=self._prior_user_message_present,
         )
         raw = self._channels.last_raw
         assert raw is not None
@@ -639,6 +644,7 @@ class TeicDaemon:
             user_message_text: str | None = self._pending_user_messages.get_nowait()
         except asyncio.QueueEmpty:
             user_message_text = None
+        self._prior_user_message_present = user_message_text is not None
         if user_message_text is not None:
             candidates.append(
                 WorkspaceCandidate(
