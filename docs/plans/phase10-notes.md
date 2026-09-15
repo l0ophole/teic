@@ -26,3 +26,32 @@
   `response`). A self-sourced ignited tick with no completed response yet
   yields zero lines, not a placeholder.
 - Not yet wired into `daemon.py:760` — still hardcoded `[]` (cp2).
+
+## cp2: daemon-wiring
+
+- `daemon.py:_on_tick` now calls `build_narrative_tail(self._conn,
+  self._session_id)` and passes the result into `render_prompt_if_ignited`
+  in place of `[]`. Only called when `broadcast.ignited` (matches cp1's
+  "empty-session/no-ignition returns `[]`" contract; skips a DB round trip
+  on non-ignited ticks).
+- **Ordering fix vs. plan sketch**: the narrative-tail query now runs
+  *before* the current tick's own `workspace_broadcast` INSERT, not after.
+  Running it after would let the just-broadcast current-turn content (the
+  same content `assemble_prompt` already puts in the `user` message) leak
+  into its own "Recent inner monologue" system block as a redundant "you:
+  ..." line one tick early. No `narrative_constructor.py` or test change
+  needed for this — it's purely a call-site ordering choice in
+  `daemon.py`.
+- `FORBIDDEN_PARAM_TYPES` / `assemble_prompt` signature: untouched, per
+  guardrail; `tests/test_llm/test_prompt_assembly.py` still passes.
+- **Pre-existing unrelated hang found while verifying**:
+  `tests/test_daemon.py::test_high_arousal_run_ignites_more_than_idle_run`
+  hangs indefinitely (reproduced identically on unmodified `main` via
+  `git stash`, so not caused by this phase's changes) — same class of
+  issue as the post-phase-9 TUI hang (`04a1097`). Deselected for cp2
+  verification; not investigated further here, out of scope for Phase 10's
+  task list.
+- Verified: `tests/test_workspace/`, `tests/test_llm/test_prompt_assembly.py`,
+  `tests/test_daemon.py` (deselecting the hang above) all green, mypy
+  clean. Full `pytest -q` batch still not run to completion in this
+  environment (same as cp1 — see BUILD_STATUS.md).

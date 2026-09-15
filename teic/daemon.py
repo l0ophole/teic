@@ -154,6 +154,7 @@ from teic.persistence.log_sink import LogSink
 from teic.selfmodel.builder import build_self_model
 from teic.selfmodel.metacognition import compute_confidence
 from teic.settings import Settings
+from teic.workspace.narrative_constructor import build_narrative_tail
 from teic.temporal.heartbeat import Heartbeat
 from teic.temporal.protention import ProtentionBuffer, ProtentionEntry
 from teic.workspace.arbiter import WorkspaceArbiter, salience_overrides
@@ -735,6 +736,18 @@ class TeicDaemon:
         self._prior_goal_gradient = self_model.identity_traits.get("goal_gradient", 0.0)
 
         broadcast = self._arbiter.select(candidates, affect_state, mood, tick_id)
+
+        # Built from ticks already committed to workspace_broadcast -- i.e.
+        # strictly before this tick's own row is inserted below, so the
+        # monologue never echoes the current turn's own content back into
+        # its own prompt (that content is already the live broadcast/user
+        # message `assemble_prompt` sends separately).
+        narrative_tail = (
+            await build_narrative_tail(self._conn, self._session_id)
+            if broadcast.ignited
+            else []
+        )
+
         await self._conn.execute(
             "INSERT INTO workspace_broadcast (broadcast_id, tick_id, winner_source, salience_score, "
             "novelty, precision_w, affective_w, goal_relevance, ignited, content, mineness_tag) "
@@ -757,7 +770,7 @@ class TeicDaemon:
         # Phase 6's prompt-tokens-only estimate (no network call), which
         # keeps every pre-Phase-9 gate test (no API key configured, no
         # client injected) exactly as before.
-        prompt = render_prompt_if_ignited(broadcast, [], modulation_params)
+        prompt = render_prompt_if_ignited(broadcast, narrative_tail, modulation_params)
         if prompt is not None:
             cost_usd = await self._handle_ignited_prompt(prompt, tick_id)
         else:

@@ -16,14 +16,18 @@
 
 ## Current state / next step
 
-Phase 10 cp1 done (commit `d806169`): mineness source-name bug fixed
-(`user_input`→`user_message`), `teic/workspace/narrative_constructor.py`
-built (`build_narrative_tail()`, no new model/migration needed — see
-phase10-notes.md). Not yet wired into `daemon.py:760` (cp2). Verified via
-targeted tests (mineness, narrative_constructor, daemon regression) +
-mypy, not the full `pytest -q` batch — that run is taking ~1hr in this
-environment and was killed rather than waited out; rerun it at a later
-checkpoint when time allows. Resume with "Continue Phase 10 at cp2".
+Phase 10 cp2 done: `daemon.py:760`'s hardcoded `[]` replaced with a real
+`build_narrative_tail()` call (queried before the current tick's own
+`workspace_broadcast` insert, so the monologue never echoes the live
+turn back into its own prompt — see phase10-notes.md cp2). Found (not
+caused by this change — reproduced on unmodified `main`) a pre-existing
+hang in `tests/test_daemon.py::test_high_arousal_run_ignites_more_than_idle_run`,
+same class as the `04a1097` TUI hang; deselected for verification, not
+fixed here. Verified via `tests/test_workspace/`,
+`tests/test_llm/test_prompt_assembly.py`, `tests/test_daemon.py` (minus
+the hang) + mypy, not the full `pytest -q` batch (still slow in this
+environment — deferred, per cp1's note, to a later checkpoint). Resume
+with "Continue Phase 10 at cp3".
 
 Post-phase-9 fix (commit `04a1097`): TUI hung at "waiting for first
 tick..." and crashed on quit with `ValueError: bad value(s) in
